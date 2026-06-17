@@ -100,6 +100,22 @@ Notes:
 - The **3D viewer** (`view.py`) writes a self-contained HTML you can orbit/zoom in
   any browser.
 
+## 🧩 Designing models from a description (skill)
+
+The **`design-stl`** skill turns a description into a *printable* STL via an
+OpenSCAD generate→verify loop: Claude writes OpenSCAD, `build.py` renders preview
+images + an STL and runs printability checks (bed fit, watertight/manifold,
+min wall thickness, overhangs), and Claude iterates until it's right — then hands
+the STL to `print-to-bambu`.
+
+```bash
+brew install --cask openscad
+.venv/bin/pip install -r .claude/skills/design-stl/requirements.txt   # trimesh, scipy, rtree
+# Claude writes model.scad, then:
+.venv/bin/python .claude/skills/design-stl/scripts/build.py model.scad   # STL + previews + report
+.venv/bin/python .claude/skills/design-stl/scripts/validate.py any.stl    # checks on any STL
+```
+
 ## 📁 Project Structure
 
 ```

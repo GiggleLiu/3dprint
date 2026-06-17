@@ -29,3 +29,10 @@ plate    = 1
 [print]
 # true if filament is fed from an AMS; false for a directly-fed external spool.
 use_ams = false
+
+[design]
+# Used by the design-stl skill. All optional (these are the defaults).
+bed            = [256, 256, 260]          # printer bed W, D, H (mm) — X2D
+min_wall       = 0.8                       # flag features thinner than this (mm)
+overhang_angle = 45                        # deg from horizontal; shallower => supports
+views          = ["iso", "front", "top"]  # preview renders to generate

@@ -1,0 +1,6 @@
+# Python deps for the design-stl skill.
+# Also requires the OpenSCAD binary: `brew install --cask openscad` (macOS).
+trimesh>=4.0
+# scipy + rtree are needed by trimesh.proximity for the wall-thickness check.
+scipy>=1.10
+rtree>=1.0

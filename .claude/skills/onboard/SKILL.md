@@ -64,3 +64,13 @@ A successful dry-run (uploads, does not print) means everything is wired up.
 | connects (TCP) but dry-run send times out | Developer/LAN Mode is OFF, or access code rotated |
 
 When `ready_to_print=True`, hand off to the **print-to-bambu** skill.
+
+## (Optional) design-stl deps
+
+If the user also wants to *design* models from descriptions (the **design-stl**
+skill), set up two extra things:
+- **OpenSCAD binary**: `brew install --cask openscad` (macOS).
+- **trimesh**: `.venv/bin/pip install -r .claude/skills/design-stl/requirements.txt`
+
+Verify: `.venv/bin/python .claude/skills/design-stl/scripts/validate.py hydrogen_molecule.stl`
+should print a printability report.
