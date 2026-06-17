@@ -68,9 +68,10 @@ When `ready_to_print=True`, hand off to the **print-to-bambu** skill.
 ## (Optional) design-stl deps
 
 If the user also wants to *design* models from descriptions (the **design-stl**
-skill), set up two extra things:
-- **OpenSCAD binary**: `brew install --cask openscad` (macOS).
-- **trimesh**: `.venv/bin/pip install -r .claude/skills/design-stl/requirements.txt`
+skill, default engine trimesh):
+- **Python deps** (required): `.venv/bin/pip install -r .claude/skills/design-stl/requirements.txt`
+  (trimesh, manifold3d, matplotlib, scipy, rtree).
+- **OpenSCAD** (optional, only for the `.scad` path): `brew install --cask openscad`.
 
 Verify: `.venv/bin/python .claude/skills/design-stl/scripts/validate.py hydrogen_molecule.stl`
 should print a printability report.

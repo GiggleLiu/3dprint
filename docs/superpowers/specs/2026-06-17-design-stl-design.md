@@ -27,7 +27,7 @@ non-OpenSCAD engines, any GUI.
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| Engine | **OpenSCAD** (LLM writes `.scad`) | CSG (`union`/`difference`) suits display models; one-command PNG render powers the vision loop |
+| Engine | **Python + trimesh by default; OpenSCAD optional** | trimesh is more flexible/data-driven, single-language, all-pip; `build.py` auto-detects `.py` vs `.scad`. (Revised from OpenSCAD-only after weighing flexibility.) |
 | Validation depth | **Full**: visual + bed-fit + mesh integrity + min-wall + overhangs | User selected full analysis |
 | Mesh analysis lib | `trimesh` | watertight/volume/thickness/normals in one dep |
 | Location | in-repo `.claude/skills/design-stl/` | ships with repo, like print-to-bambu |
@@ -124,6 +124,27 @@ All optional; `validate.py`/`build.py` fall back to these defaults if absent.
 - trimesh missing → install hint (validation degrades to bed-fit only rather than
   crashing).
 - Empty/zero-triangle STL → flagged as failed geometry.
+
+## Implementation status (2026-06-17)
+
+Implemented on branch `design-stl`. `build.py` dispatches by extension: `.py`
+trimesh builder (default) or `.scad` (OpenSCAD, optional). Verified on this
+machine:
+- **trimesh path** end-to-end: a watertight H₂O builder → STL + 3 matplotlib
+  preview PNGs + validation; `watertight=true`, fits bed, `ok=true`. The iso
+  preview was visually confirmed to be a correct water molecule.
+- **validate.py** on the repo's `hydrogen_molecule.stl` → correctly flags it
+  **not watertight** (the hand-built mesh just concatenates triangles).
+- **min-wall** uses a 5th-percentile thickness (absolute min spikes to ~0 at
+  concave CSG seams); documented as approximate / over-flags seams.
+- **OpenSCAD path** falls back cleanly with an install hint when the binary is
+  absent. (On this machine the Homebrew cask install was incomplete — dangling
+  symlink, empty app — so the optional path is coded but not yet run here.)
+- Fixed a stale-output bug: `build.py` now deletes prior STL/PNGs before building
+  so a previous run's files can't masquerade as success.
+
+Deps added: trimesh, manifold3d (boolean union → watertight), matplotlib
+(headless previews), scipy + rtree (proximity/thickness).
 
 ## Testing
 

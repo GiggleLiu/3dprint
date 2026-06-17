@@ -102,18 +102,21 @@ Notes:
 
 ## 🧩 Designing models from a description (skill)
 
-The **`design-stl`** skill turns a description into a *printable* STL via an
-OpenSCAD generate→verify loop: Claude writes OpenSCAD, `build.py` renders preview
+The **`design-stl`** skill turns a description into a *printable* STL via a
+generate→verify loop: Claude writes a geometry builder, `build.py` renders preview
 images + an STL and runs printability checks (bed fit, watertight/manifold,
 min wall thickness, overhangs), and Claude iterates until it's right — then hands
 the STL to `print-to-bambu`.
 
+Default engine is **Python + trimesh** (flexible, data-driven, all pip). OpenSCAD
+is an optional alternate for CSG (`brew install --cask openscad`).
+
 ```bash
-brew install --cask openscad
-.venv/bin/pip install -r .claude/skills/design-stl/requirements.txt   # trimesh, scipy, rtree
-# Claude writes model.scad, then:
-.venv/bin/python .claude/skills/design-stl/scripts/build.py model.scad   # STL + previews + report
-.venv/bin/python .claude/skills/design-stl/scripts/validate.py any.stl    # checks on any STL
+.venv/bin/pip install -r .claude/skills/design-stl/requirements.txt   # trimesh, manifold3d, matplotlib, scipy, rtree
+# Claude writes model.py (a builder returning a watertight trimesh), then:
+.venv/bin/python .claude/skills/design-stl/scripts/build.py model.py    # STL + previews + report
+.venv/bin/python .claude/skills/design-stl/scripts/build.py model.scad  # optional OpenSCAD path
+.venv/bin/python .claude/skills/design-stl/scripts/validate.py any.stl  # checks on any STL
 ```
 
 ## 📁 Project Structure

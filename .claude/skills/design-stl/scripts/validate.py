@@ -131,12 +131,16 @@ def validate_stl(stl: Path, cfg: dict) -> dict:
 
         # Min wall thickness (approximate): inscribed-sphere thickness at samples.
         try:
+            import numpy as np
             pts, fidx = trimesh.sample.sample_surface(mesh, 1500)
             th = trimesh.proximity.thickness(mesh, pts, normals=mesh.face_normals[fidx])
             th = [float(t) for t in th if t == t and t > 0]  # drop nan/<=0
             if th:
-                report["min_wall_mm"] = round(min(th), 3)
-                report["min_wall_ok"] = report["min_wall_mm"] >= cfg["min_wall"]
+                # 5th percentile, not absolute min: inscribed-sphere thickness
+                # spikes to ~0 at concave CSG seams, which aren't real thin walls.
+                p5 = float(np.percentile(th, 5))
+                report["min_wall_mm"] = round(p5, 3)
+                report["min_wall_ok"] = p5 >= cfg["min_wall"]
         except Exception as e:  # noqa
             report["warnings"].append(f"wall-thickness calc failed (rtree?): {e}")
             report["checks_skipped"].append("min wall thickness")
