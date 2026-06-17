@@ -35,7 +35,7 @@ STL on one LAN printer**, cleanly.
 | Pipeline scope | Full: slice + upload + print + monitor | User wants STL → physical print end to end |
 | Connection | Local LAN mode (MQTT control + FTPS upload) | Offline, private, no Bambu account |
 | Printer model | Configurable / machine-agnostic | User has multiple / unspecified models |
-| Slicer | OrcaSlicer CLI, Bambu Studio as drop-in fallback | Best-documented headless CLI; identical flags (Orca is a fork) |
+| Slicer | Auto-detect; **Bambu Studio preferred for the X2D** (see below), OrcaSlicer otherwise | Identical CLI flags (Orca is a fork); new models get profiles in Bambu Studio first |
 | LAN library | `bambulabs-api` (pip) | Maintained Python lib for MQTT + FTPS + status |
 | Safety gate | Confirm after slice, before print | Show size/time/filament/temps, then wait for go-ahead |
 | Config storage | Local `bambu.toml`, gitignored | Set once, reused; secrets never committed |
@@ -58,6 +58,32 @@ restores the legacy MQTT-control + FTPS-upload behavior without cloud.
 Sources: Bambu third-party integration wiki; Hackaday coverage of the
 Authorization Control System (Jan 2025); OrcaSlicer/Bambu Studio CLI references
 (Printago); `bambulabs-api` on PyPI.
+
+## X2D-specific considerations
+
+The target printer is a **Bambu Lab X2D** (launched April 2026): dual-nozzle
+CoreXY, 256×256×260 mm, 90 °C heated chamber, Neural LiDAR 2.0. This is recent
+enough to add three concrete constraints:
+
+1. **Slicer profile availability.** Stable OrcaSlicer does **not** yet ship an
+   X2D machine profile — only OrcaSlicer 2.4-Alpha / dev nightlies do; **Bambu
+   Studio** has it officially. So for this machine the skill should prefer Bambu
+   Studio (or a recent OrcaSlicer nightly). `preflight.py` must **validate that
+   the configured `[slice].machine` profile actually exists in the detected
+   slicer** and fail with a clear message ("this slicer has no X2D profile;
+   install Bambu Studio or OrcaSlicer ≥2.4-alpha") rather than emitting a bad
+   slice. The skill stays machine-agnostic; this is enforced by validation, not
+   by hardcoding the X2D.
+2. **Dual nozzle.** The X2D has two extruders. For our single-material,
+   single-color PLA print the slice targets the **primary extruder only**;
+   dual-material / support-interface / AMS mapping stays out of scope (YAGNI).
+   The chosen X2D machine profile handles extruder assignment by default.
+3. **LAN-library maturity risk.** `bambulabs-api` predates the X2D and may not
+   yet model its status/telemetry schema or confirm Developer-Mode print
+   initiation. Mitigation: keep `send.py`/`monitor.py` tolerant of unknown MQTT
+   fields (degrade to a minimal "started / printing / done / error" view rather
+   than crashing), and verify against the real printer in `--dry-run` first.
+   Confirming X2D support is an explicit planning task below.
 
 ## Workflow
 
@@ -126,7 +152,7 @@ access_code = ""
 binary = ""            # blank = auto-detect OrcaSlicer, then Bambu Studio
 
 [slice]
-machine      = "Bambu Lab X1 Carbon 0.4 nozzle"   # set to the user's model
+machine      = "Bambu Lab X2D 0.4 nozzle"   # exact string TBD from installed slicer; target is an X2D
 filament     = "Bambu PLA Basic"
 layer_height = 0.2
 infill       = 0.15
@@ -195,12 +221,21 @@ leaves a half-started print:
 - No secrets in version control: `bambu.toml` is gitignored; only
   `bambu.toml.example` (placeholders) is committed.
 - The repo `README.md` gains a "Printing on a Bambu printer" section covering:
-  install OrcaSlicer, `pip install -r .claude/skills/print-to-bambu/requirements.txt`,
-  enable Developer Mode, run `setup_config.py`, fill in `bambu.toml`.
+  install a supported slicer (Bambu Studio, or OrcaSlicer with a profile for your
+  model — note the X2D needs Bambu Studio or OrcaSlicer ≥2.4-alpha),
+  `pip install -r .claude/skills/print-to-bambu/requirements.txt`, enable
+  Developer Mode, run `setup_config.py`, fill in `bambu.toml`.
 
 ## Open implementation questions (resolve during planning)
 
 - Exact `bambulabs-api` method names for upload + start-print + status (verify
-  against the installed version).
-- Exact OrcaSlicer machine/filament profile identifiers for the user's specific
-  model (the `[slice].machine` / `filament` string values).
+  against the installed version) **and whether that version supports the X2D**;
+  if not, identify a fallback (newer release, fork, or raw MQTT/FTPS).
+- Exact **X2D** machine/filament profile identifiers in the installed slicer
+  (the `[slice].machine` / `filament` string values) — read from Bambu Studio's
+  or OrcaSlicer-nightly's preset files / GUI dropdown.
+- Confirm **Developer / LAN Mode exists and is enabled** on X2D firmware (the
+  2026 Authorization Control system applies); confirm print initiation works
+  over LAN before relying on it.
+- Which slicer is actually installed on this machine (Bambu Studio vs OrcaSlicer
+  nightly) — drives the auto-detect default for the X2D.
