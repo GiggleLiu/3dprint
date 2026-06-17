@@ -1,0 +1,4 @@
+# Python deps for the print-to-bambu skill.
+# Slicing (preflight.py, slice.py) needs only the standard library (Python 3.11+
+# for tomllib). Only the LAN print/monitor step needs this package:
+bambulabs-api>=2.0

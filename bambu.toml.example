@@ -1,0 +1,31 @@
+# print-to-bambu configuration — COPY to `bambu.toml` and fill in.
+# `bambu.toml` is gitignored: never commit your access code.
+# Run: python3 .claude/skills/print-to-bambu/scripts/setup_config.py
+
+[printer]
+# From the printer screen: Settings > WLAN (IP) and Settings > Device (serial).
+ip          = "192.168.x.x"
+serial      = "XXXXXXXXXXXXXXX"
+# LAN access code from the printer screen. Prefer the BAMBU_ACCESS_CODE env var;
+# if set there, it overrides this field. Leave blank to force using the env var.
+access_code = ""
+
+[slicer]
+# Leave blank to auto-detect Bambu Studio, then OrcaSlicer. Or set an explicit
+# path to the binary (macOS example):
+# binary = "/Applications/BambuStudio.app/Contents/MacOS/BambuStudio"
+binary = ""
+
+[slice]
+# Preset names EXACTLY as they appear in your slicer's dropdowns. preflight.py
+# verifies the machine profile exists in the detected slicer before slicing.
+# NOTE: the Bambu Lab X2D (April 2026) needs an up-to-date Bambu Studio or
+# OrcaSlicer >=2.4-alpha; older builds have no X2D profile.
+machine  = "Bambu Lab X2D 0.4 nozzle"
+process  = "0.20mm Standard @BBL X2D"
+filament = "Bambu PLA Basic @BBL X2D"
+plate    = 1
+
+[print]
+# true if filament is fed from an AMS; false for a directly-fed external spool.
+use_ams = false

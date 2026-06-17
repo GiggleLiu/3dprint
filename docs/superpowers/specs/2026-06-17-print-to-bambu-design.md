@@ -226,6 +226,26 @@ leaves a half-started print:
   `pip install -r .claude/skills/print-to-bambu/requirements.txt`, enable
   Developer Mode, run `setup_config.py`, fill in `bambu.toml`.
 
+## Implementation status (2026-06-17)
+
+Implemented in `.claude/skills/`. Verified on this machine:
+- Slicing the repo's `hydrogen_molecule.stl` for the **X2D** works in ~2s →
+  valid `.gcode.3mf`, 19m print estimate, 4.28 g filament (weight recomputed from
+  length, since Bambu's CLI writes 0.00 g). Bambu Studio 02.05.00.66 **does** ship
+  the X2D profiles, so no slicer update was needed (preflight still validates this).
+- `preflight.py` reports `ready_to_print=True`; printer is reachable on :8883.
+- LAN print path (`send.py`/`monitor.py`) is coded against the real bambulabs-api
+  2.6.6 surface, but a dry-run connect stays unauthenticated → **Developer/LAN
+  Mode is currently OFF on the printer**. Enabling it is the only remaining step
+  before a real print. (Matches the documented gate.)
+
+Two additions beyond the original spec, by user request:
+- `view.py` — self-contained three.js HTML viewer to orbit/zoom an STL pre-print.
+- `onboard` skill (`/onboard`) — first-time setup walkthrough (slicer, venv,
+  config, Developer Mode), driving `setup_config.py` + `preflight.py`.
+
+Config gained a `[print].use_ams` toggle (AMS vs external spool).
+
 ## Open implementation questions (resolve during planning)
 
 - Exact `bambulabs-api` method names for upload + start-print + status (verify

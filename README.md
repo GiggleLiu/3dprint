@@ -67,6 +67,39 @@ With default settings, the model is approximately:
 
 Scale it up or down in your slicer as needed!
 
+## 🖨️ Printing on a Bambu printer (skill)
+
+This repo ships a Claude Code skill, **`print-to-bambu`**, that slices an STL and
+prints it on a Bambu Lab printer over your local network — with a confirmation
+gate before anything actually prints.
+
+**First-time setup:** run the **`/onboard`** skill. It installs/locates a slicer
+(Bambu Studio or OrcaSlicer), creates a Python venv, scaffolds a gitignored
+`bambu.toml`, helps you find the printer IP / serial / access code, and walks you
+through enabling **Developer / LAN Mode** (required to *start* prints).
+
+Quick manual path once set up (run with the venv's Python):
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r .claude/skills/print-to-bambu/requirements.txt
+.venv/bin/python .claude/skills/print-to-bambu/scripts/setup_config.py   # edit bambu.toml
+.venv/bin/python .claude/skills/print-to-bambu/scripts/preflight.py       # all ✓?
+.venv/bin/python .claude/skills/print-to-bambu/scripts/view.py hydrogen_molecule.stl --open   # 3D preview
+.venv/bin/python .claude/skills/print-to-bambu/scripts/slice.py hydrogen_molecule.stl         # -> .gcode.3mf + summary
+# review the printed summary, then:
+.venv/bin/python .claude/skills/print-to-bambu/scripts/send.py hydrogen_molecule.gcode.3mf    # add --dry-run to test
+.venv/bin/python .claude/skills/print-to-bambu/scripts/monitor.py                              # live progress
+```
+
+Notes:
+- **`bambu.toml` is gitignored** (it holds your LAN access code). Only
+  `bambu.toml.example` is committed.
+- Requires the printer in **Developer/LAN Mode** to start a print; slicing and
+  monitoring work without it.
+- The **3D viewer** (`view.py`) writes a self-contained HTML you can orbit/zoom in
+  any browser.
+
 ## 📁 Project Structure
 
 ```

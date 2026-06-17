@@ -1,9 +1,10 @@
 # Printer credentials / local config — NEVER commit (contains LAN access code)
 bambu.toml
 
-# Slicer build output
+# Slicer build output + generated viewers
 *.gcode
 *.gcode.3mf
+*.viewer.html
 
 # Python
 __pycache__/
