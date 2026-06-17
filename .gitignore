@@ -1,0 +1,18 @@
+# Printer credentials / local config — NEVER commit (contains LAN access code)
+bambu.toml
+
+# Slicer build output
+*.gcode
+*.gcode.3mf
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+
+# macOS
+.DS_Store
