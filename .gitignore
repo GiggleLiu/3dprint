@@ -8,7 +8,8 @@ bambu.*.toml
 # Slicer build output + generated viewers + design previews
 *.gcode
 *.gcode.3mf
-result.json          # Bambu Studio CLI drops this in cwd on every slice
+# Bambu Studio CLI drops this in cwd on every slice
+result.json
 *.viewer.html
 *.iso.png
 *.front.png
