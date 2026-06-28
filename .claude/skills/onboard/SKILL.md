@@ -20,12 +20,18 @@ If none, have the user install **Bambu Studio** (<https://bambulab.com/en/downlo
 Newest printers (X2D, H2 series) need an up-to-date build, or the model's slice
 profile will be missing.
 
-## 2. Python deps
+## 2. Python environment (check, then set up if missing)
+One command — run with the **system** `python3` — checks Python, the virtualenv, and
+the required packages, and sets up whatever is missing (it bootstraps `.venv`, so it
+must run *before* the venv exists):
 ```
-python3 -m venv .venv
-.venv/bin/pip install -r .claude/skills/print-to-bambu/requirements.txt
+python3 .claude/skills/onboard/scripts/setup_env.py                # printing deps
+python3 .claude/skills/onboard/scripts/setup_env.py --with-design  # + design-stl deps
 ```
-Run every later script with `.venv/bin/python` (that interpreter has bambulabs-api).
+It needs **Python 3.11+** (it creates the venv and pip-installs, but can't install
+Python itself — if yours is older it says so and stops). Pass `--check` to verify
+without changing anything (exit 1 if something's missing). After it reports
+`environment ready`, run every later script with `.venv/bin/python`.
 
 ## 3. Config file
 ```
@@ -74,7 +80,7 @@ A successful dry-run (uploads, does not print) means everything is wired up.
 | slicer ✗ | install Bambu Studio / OrcaSlicer, or set `[slicer].binary` |
 | machine profile ✗ | slicer too old for the model, or wrong preset name |
 | process profile ✗ NOT compatible | wrong process family — run `list_presets.py --machine "<machine>"` (e.g. P1S uses `@BBL X1C`, not `@BBL P1P`) |
-| bambulabs-api ✗ | `pip install -r` into the interpreter you run scripts with |
+| bambulabs-api ✗ | re-run step 2: `setup_env.py` (installs it into `.venv`) |
 | printer `api no` / `tcp down` | printer off, wrong IP/subnet, or only reachable over a VPN (`[vpn via utunN]`) |
 | `tcp up` but `api no` | Developer/LAN Mode is OFF, or the access code rotated |
 
@@ -84,9 +90,10 @@ When `ready_to_print=True`, hand off to the **print-to-bambu** skill.
 
 If the user also wants to *design* models from descriptions (the **design-stl**
 skill, default engine trimesh):
-- **Python deps** (required): `.venv/bin/pip install -r .claude/skills/design-stl/requirements.txt`
-  (trimesh, manifold3d, matplotlib, scipy, rtree).
+- **Python deps** (required): re-run step 2 with `--with-design`
+  (`python3 .claude/skills/onboard/scripts/setup_env.py --with-design`) — it adds
+  trimesh, manifold3d, matplotlib, scipy, rtree, networkx.
 - **OpenSCAD** (optional, only for the `.scad` path): `brew install --cask openscad`.
 
-Verify: `.venv/bin/python .claude/skills/design-stl/scripts/validate.py hydrogen_molecule.stl`
+Verify: `.venv/bin/python .claude/skills/design-stl/scripts/validate.py examples/hydrogen_molecule.stl`
 should print a printability report.

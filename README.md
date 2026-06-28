@@ -1,152 +1,97 @@
-# 🧪 Hydrogen Molecule 3D Model Generator
+# 🖨️ Design and print 3D models by asking Claude
 
-A Python project to create 3D printable molecular models, starting with the simplest molecule: **Hydrogen (H₂)**.
+Tell [Claude Code](https://claude.com/claude-code) what you want to make and which
+Bambu Lab printer to send it to. It turns your description into a printable model,
+slices it, and prints it over your local network — and **never starts a print until
+you've seen the preview and said go.**
 
-## 🎯 What This Creates
+> - *"Design a desk standee of our logo and print it on the P1S."*
+> - *"Slice this STL and show me the time and filament estimate."*
+> - *"Print model.stl — dry run first."*
 
-This script generates an STL file of a hydrogen molecule consisting of:
-- **Two spheres** representing hydrogen atoms
-- **A cylinder** representing the covalent bond
+## What you can do
 
-The model is ready for 3D printing in standard slicer software (Cura, PrusaSlicer, etc.)
+- 🎨 **Turn a description into a printable STL.** Describe the object; Claude builds
+  it, shows you a preview, and checks it's actually printable — watertight, fits the
+  bed, walls thick enough, no nasty overhangs — before you commit.
+- 🖨️ **Print over your network.** Slice an STL and send it to a Bambu Lab printer
+  over LAN, with live progress until it finishes.
+- ✋ **Stay in control.** You see the print time, filament weight, and temperatures
+  and approve before anything heats up. Claude also refuses to start a print that
+  would extrude nothing (empty spool, wrong filament slot).
+- 🖧 **Juggle several printers.** Keep a profile per printer and pick one by name —
+  or let Claude choose the one that's actually on your network.
 
-## 📦 Installation
+## First time? Set up once
 
-1. Make sure you have Python 3.8+ installed
+Just say **"set up my printer"** (or run **`/onboard`**) and Claude walks you through it:
 
-2. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
+1. **Install a slicer** — [Bambu Studio](https://bambulab.com/en/download) (or
+   OrcaSlicer). A brand-new printer model needs an up-to-date build.
+2. **Python environment** — Claude creates a local virtualenv and installs what's needed.
+3. **Connect your printer** — Claude sets up a private config and helps you copy the
+   IP / serial / access code off the printer screen, then picks slicer presets that
+   match your model.
+4. **Enable Developer / LAN Mode** on the printer — needed to *start* prints
+   (previewing and slicing work without it).
 
-## 🚀 Usage
-
-Run the script to generate your hydrogen molecule:
-
-```bash
-python hydrogen_molecule.py
-```
-
-This creates `hydrogen_molecule.stl` in the current directory.
-
-### Customizing Your Model
-
-Edit the parameters in `hydrogen_molecule.py`:
-
-```python
-create_hydrogen_molecule(
-    atom_radius=10.0,      # Size of each atom (mm)
-    bond_radius=3.0,       # Thickness of the bond (mm)
-    bond_length=25.0,      # Distance between atoms (mm)
-    resolution=48,         # Mesh smoothness (24-64 recommended)
-    output_file="hydrogen_molecule.stl"
-)
-```
-
-**Parameter Guide:**
-| Parameter | Description | Recommended Range |
-|-----------|-------------|-------------------|
-| `atom_radius` | Size of hydrogen spheres | 8-15 mm |
-| `bond_radius` | Thickness of the connecting cylinder | 2-4 mm |
-| `bond_length` | Distance between atom centers | 20-30 mm |
-| `resolution` | Mesh detail level | 24 (draft) to 64 (smooth) |
-
-## 🖨️ 3D Printing Tips
-
-### Recommended Settings
-- **Layer Height:** 0.1-0.2 mm
-- **Infill:** 15-20%
-- **Supports:** Usually not needed
-- **Material:** PLA (easy to print, looks great)
-
-### Model Size
-With default settings, the model is approximately:
-- Length: ~45 mm
-- Height: ~20 mm
-- Width: ~20 mm
-
-Scale it up or down in your slicer as needed!
-
-## 🖨️ Printing on a Bambu printer (skill)
-
-This repo ships a Claude Code skill, **`print-to-bambu`**, that slices an STL and
-prints it on a Bambu Lab printer over your local network — with a confirmation
-gate before anything actually prints.
-
-**First-time setup:** run the **`/onboard`** skill. It installs/locates a slicer
-(Bambu Studio or OrcaSlicer), creates a Python venv, scaffolds a gitignored
-`bambu.toml`, helps you find the printer IP / serial / access code, and walks you
-through enabling **Developer / LAN Mode** (required to *start* prints).
-
-Quick manual path once set up (run with the venv's Python):
+To confirm it all worked, ask Claude to run **preflight** — you're aiming for
+`ready_to_print=True`:
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r .claude/skills/print-to-bambu/requirements.txt
-.venv/bin/python .claude/skills/print-to-bambu/scripts/setup_config.py   # edit bambu.toml
-.venv/bin/python .claude/skills/print-to-bambu/scripts/preflight.py       # all ✓?
-.venv/bin/python .claude/skills/print-to-bambu/scripts/view.py hydrogen_molecule.stl --open   # 3D preview
-.venv/bin/python .claude/skills/print-to-bambu/scripts/slice.py hydrogen_molecule.stl         # -> .gcode.3mf + summary
-# review the printed summary, then:
-.venv/bin/python .claude/skills/print-to-bambu/scripts/send.py hydrogen_molecule.gcode.3mf    # add --dry-run to test
-.venv/bin/python .claude/skills/print-to-bambu/scripts/monitor.py                              # live progress
+.venv/bin/python .claude/skills/print-to-bambu/scripts/preflight.py
 ```
 
-Notes:
-- **`bambu.toml` is gitignored** (it holds your LAN access code). Only
-  `bambu.toml.example` is committed.
-- Requires the printer in **Developer/LAN Mode** to start a print; slicing and
-  monitoring work without it.
-- The **3D viewer** (`view.py`) writes a self-contained HTML you can orbit/zoom in
-  any browser.
+> Your printer config holds its access code and is kept private — never committed.
 
-## 🧩 Designing models from a description (skill)
+## Print an STL
 
-The **`design-stl`** skill turns a description into a *printable* STL via a
-generate→verify loop: Claude writes a geometry builder, `build.py` renders preview
-images + an STL and runs printability checks (bed fit, watertight/manifold,
-min wall thickness, overhangs), and Claude iterates until it's right — then hands
-the STL to `print-to-bambu`.
-
-Default engine is **Python + trimesh** (flexible, data-driven, all pip). OpenSCAD
-is an optional alternate for CSG (`brew install --cask openscad`).
+Just ask — *"print model.stl"* — and Claude previews it, slices it, shows you the
+summary, waits for your OK, then prints and watches it. Under the hood that's:
 
 ```bash
-.venv/bin/pip install -r .claude/skills/design-stl/requirements.txt   # trimesh, manifold3d, matplotlib, scipy, rtree
-# Claude writes model.py (a builder returning a watertight trimesh), then:
-.venv/bin/python .claude/skills/design-stl/scripts/build.py model.py    # STL + previews + report
-.venv/bin/python .claude/skills/design-stl/scripts/build.py model.scad  # optional OpenSCAD path
-.venv/bin/python .claude/skills/design-stl/scripts/validate.py any.stl  # checks on any STL
+P=.claude/skills/print-to-bambu/scripts
+.venv/bin/python $P/view.py    model.stl --open   # 3D preview in your browser
+.venv/bin/python $P/slice.py   model.stl          # → print time, filament, temperatures
+# ── you review the summary and approve ──
+.venv/bin/python $P/send.py    model.gcode.3mf    # add --dry-run to upload without printing
+.venv/bin/python $P/monitor.py                    # live progress until it finishes
 ```
 
-## 📁 Project Structure
+**Why it won't surprise you:** printing is never automatic. After slicing, Claude
+shows you the numbers and stops for a yes. And before it starts, it checks the
+printer's *actual* filament — the AMS slots and external spool — and refuses to
+print if the source you chose is empty or the wrong type. When you print from an
+AMS it pre-loads your slot first, so the printer never runs dry.
 
+## Design a model from a description
+
+*"Design a 60 mm hex planter with drainage holes."* Claude writes a small builder,
+renders previews and an STL, and runs printability checks — iterating until the
+model is sound and ready to print. The default toolkit is Python + trimesh (pure
+pip); OpenSCAD is an optional alternative for CSG work.
+
+```bash
+.venv/bin/python .claude/skills/design-stl/scripts/build.py    model.py   # → STL + previews + report
+.venv/bin/python .claude/skills/design-stl/scripts/validate.py any.stl    # printability check on any STL
 ```
-3dprint/
-├── hydrogen_molecule.py   # Main script to generate the model
-├── requirements.txt       # Python dependencies
-├── README.md             # This file
-└── hydrogen_molecule.stl # Generated model (after running script)
+
+## Working with more than one printer
+
+Keep a profile per printer and switch by name — or let Claude pick the one that's
+reachable on your network rather than only over a VPN:
+
+```bash
+P=.claude/skills/print-to-bambu/scripts
+.venv/bin/python $P/use_printer.py --list   # every printer + whether it's on your LAN or only via VPN
+.venv/bin/python $P/use_printer.py p1s      # make that one active
+.venv/bin/python $P/use_printer.py --auto   # auto-pick the one on your physical network
 ```
 
-## 🔬 About Hydrogen Molecules
+## License
 
-Hydrogen (H₂) is the simplest and most abundant molecule in the universe! 
-
-- **Atoms:** 2 hydrogen atoms
-- **Bond Type:** Single covalent bond
-- **Real Bond Length:** ~74 picometers (we scale it up for printing!)
-
-This model is a great educational tool for:
-- Learning about molecular structure
-- Understanding covalent bonding
-- Chemistry class demonstrations
-
-## 📝 License
-
-MIT License - Feel free to use, modify, and share!
+MIT — use, modify, and share freely.
 
 ---
 
-Happy Printing! 🎉
-
+Happy printing! 🎉
