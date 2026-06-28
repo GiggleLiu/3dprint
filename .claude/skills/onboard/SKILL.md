@@ -29,12 +29,15 @@ Run every later script with `.venv/bin/python` (that interpreter has bambulabs-a
 
 ## 3. Config file
 ```
-.venv/bin/python .claude/skills/print-to-bambu/scripts/setup_config.py
+# Pass --machine to auto-fill COMPATIBLE process/filament presets (no guessing):
+.venv/bin/python .claude/skills/print-to-bambu/scripts/setup_config.py \
+    --machine "Bambu Lab P1S 0.4 nozzle"
 ```
-This writes a gitignored `bambu.toml`. Then help the user fill it in:
+This writes a gitignored `bambu.toml`. Use `list_presets.py` to find the exact
+machine name. Then help the user fill it in:
 - `[printer] ip` and `serial` — from the printer screen (Settings → WLAN / Device).
-- `[slice] machine/process/filament` — preset names EXACTLY as they appear in the
-  slicer's dropdowns (preflight verifies they exist).
+- `[slice] machine/process/filament` — `--machine` auto-fills compatible presets;
+  preflight verifies both existence **and** machine-compatibility.
 - access code — prefer `export BAMBU_ACCESS_CODE=...` over writing it to the file.
 
 ## 4. Developer / LAN Mode (required to START prints)
@@ -42,7 +45,18 @@ Slicing and monitoring work without it; **starting a print does not**. Walk the
 user through `.claude/skills/print-to-bambu/reference/developer-mode.md` and have
 them read the **access code** off the printer screen.
 
-## 5. Verify
+## 5. Confirm hardware — the set-once print params
+These rarely change, so confirm them **now** and store them in `bambu.toml`; the
+per-print parameter gate then trusts them instead of re-asking every print.
+- **Build plate** → `[slice].bed_type`. Ask which plate is physically on the bed
+  (P1S/X1 default is `"Textured PEI Plate"`). Unset defaults to *Cool Plate* (~35 °C)
+  — too cold for PLA and a classic first-layer-fail.
+- **AMS?** → `[print].use_ams` and `[print].ams_tray`. If an AMS is attached and
+  loaded, set `use_ams = true`. You can confirm what the printer actually sees
+  (once creds + LAN Mode are set) — it reports the AMS and which slots hold
+  filament. **`use_ams = false` while filament is only in the AMS prints nothing.**
+
+## 6. Verify
 ```
 .venv/bin/python .claude/skills/print-to-bambu/scripts/preflight.py
 ```
@@ -58,9 +72,21 @@ A successful dry-run (uploads, does not print) means everything is wired up.
 |---------|-----|
 | config ✗ | run setup_config.py; set ip/serial |
 | slicer ✗ | install Bambu Studio / OrcaSlicer, or set `[slicer].binary` |
-| machine/process/filament profile ✗ | slicer too old for the model, or wrong preset name |
+| machine profile ✗ | slicer too old for the model, or wrong preset name |
+| process profile ✗ NOT compatible | wrong process family — run `list_presets.py --machine "<machine>"` (e.g. P1S uses `@BBL X1C`, not `@BBL P1P`) |
 | bambulabs-api ✗ | `pip install -r` into the interpreter you run scripts with |
-| printer unreachable | wrong IP, printer off, or different subnet |
-| connects (TCP) but dry-run send times out | Developer/LAN Mode is OFF, or access code rotated |
+| printer `api no` / `tcp down` | printer off, wrong IP/subnet, or only reachable over a VPN (`[vpn via utunN]`) |
+| `tcp up` but `api no` | Developer/LAN Mode is OFF, or the access code rotated |
 
 When `ready_to_print=True`, hand off to the **print-to-bambu** skill.
+
+## (Optional) design-stl deps
+
+If the user also wants to *design* models from descriptions (the **design-stl**
+skill, default engine trimesh):
+- **Python deps** (required): `.venv/bin/pip install -r .claude/skills/design-stl/requirements.txt`
+  (trimesh, manifold3d, matplotlib, scipy, rtree).
+- **OpenSCAD** (optional, only for the `.scad` path): `brew install --cask openscad`.
+
+Verify: `.venv/bin/python .claude/skills/design-stl/scripts/validate.py hydrogen_molecule.stl`
+should print a printability report.

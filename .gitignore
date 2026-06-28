@@ -1,10 +1,19 @@
 # Printer credentials / local config — NEVER commit (contains LAN access code)
+# Covers per-printer variants (bambu.x2d.toml, bambu.p1s.toml, …) but not
+# bambu.toml.example, which is the committed placeholder template.
 bambu.toml
+bambu.*.toml
+!bambu.toml.example
 
-# Slicer build output + generated viewers
+# Slicer build output + generated viewers + design previews
 *.gcode
 *.gcode.3mf
+result.json          # Bambu Studio CLI drops this in cwd on every slice
 *.viewer.html
+*.iso.png
+*.front.png
+*.top.png
+*.right.png
 
 # Python
 __pycache__/

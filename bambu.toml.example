@@ -25,7 +25,23 @@ machine  = "Bambu Lab X2D 0.4 nozzle"
 process  = "0.20mm Standard @BBL X2D"
 filament = "Bambu PLA Basic @BBL X2D"
 plate    = 1
+# Build-plate type — sets the bed temperature. One of: "Textured PEI Plate",
+# "Smooth PEI Plate", "Cool Plate", "Engineering Plate", "High Temp Plate".
+# Leave unset to use the profile default (often "Cool Plate" at a low temp —
+# too cold for PLA on a textured PEI plate). Set this to match your real plate.
+# bed_type = "Textured PEI Plate"
 
 [print]
 # true if filament is fed from an AMS; false for a directly-fed external spool.
+# If you have an AMS loaded, this MUST be true, or the printer feeds from the
+# (empty) external path and extrudes nothing.
 use_ams = false
+# Which AMS slot (0-3) to print from when use_ams is true.
+ams_tray = 0
+
+[design]
+# Used by the design-stl skill. All optional (these are the defaults).
+bed            = [256, 256, 260]          # printer bed W, D, H (mm) — X2D
+min_wall       = 0.8                       # flag features thinner than this (mm)
+overhang_angle = 45                        # deg from horizontal; shallower => supports
+views          = ["iso", "front", "top"]  # preview renders to generate

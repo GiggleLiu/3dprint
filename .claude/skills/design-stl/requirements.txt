@@ -1,0 +1,11 @@
+# Python deps for the design-stl skill (default engine: trimesh).
+trimesh>=4.0
+manifold3d>=2.0   # robust, watertight boolean union/difference for trimesh
+matplotlib>=3.7   # headless preview renders (Agg) for the verify loop
+scipy>=1.10       # required by trimesh.proximity for the wall-thickness check
+rtree>=1.0        # speeds up trimesh proximity queries
+networkx>=3.0     # required by trimesh.repair.fix_normals (winding fix)
+#
+# OPTIONAL alternate engine: OpenSCAD (CSG). Only needed if you build from a
+# .scad file instead of a .py trimesh builder:
+#   brew install --cask openscad

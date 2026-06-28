@@ -13,9 +13,11 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
 import subprocess
 import sys
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -42,8 +44,9 @@ def resolve_presets(slicer_path: Path, slice_cfg: dict, overrides: dict) -> dict
 
 
 def build_command(slicer: Path, presets: dict, stl: Path, out: Path,
-                  plate: int) -> list[str]:
-    settings = f"{presets['machine'][1]};{presets['process'][1]}"
+                  plate: int, process_path: Path | None = None) -> list[str]:
+    proc = process_path or presets["process"][1]
+    settings = f"{presets['machine'][1]};{proc}"
     return [
         str(slicer),
         "--load-settings", settings,
@@ -54,6 +57,34 @@ def build_command(slicer: Path, presets: dict, stl: Path, out: Path,
         "--export-3mf", str(out),
         str(stl),
     ]
+
+
+# Valid Bambu build-plate types (curr_bed_type). The slicer picks the bed temp
+# from the filament preset's per-plate temps based on this.
+BED_TYPES = {
+    "cool plate": "Cool Plate",
+    "textured pei plate": "Textured PEI Plate",
+    "textured pei": "Textured PEI Plate",
+    "smooth pei plate": "Smooth PEI Plate",
+    "engineering plate": "Engineering Plate",
+    "high temp plate": "High Temp Plate",
+}
+
+
+def make_bed_type_process(process_json: Path, bed_type: str) -> Path:
+    """Copy a process preset with curr_bed_type injected, as a single temp file.
+
+    The CLI rejects a second process file in --load-settings ("duplicate process
+    config"), so we can't add the bed type as an overlay — we clone the process
+    and set curr_bed_type on the clone. inherits still resolves against the
+    system profiles. Returns a temp path the caller must unlink.
+    """
+    data = json.loads(process_json.read_text())
+    data["curr_bed_type"] = bed_type
+    fd, tmp = tempfile.mkstemp(prefix="proc_bedtype_", suffix=".json")
+    with os.fdopen(fd, "w") as fh:
+        json.dump(data, fh)
+    return Path(tmp)
 
 
 def _gcode_text(threemf: Path, plate: int) -> str | None:
@@ -76,7 +107,7 @@ def parse_summary(gcode: str) -> dict:
     """Best-effort extraction of estimates from Bambu/Orca G-code header+config."""
     def search(*patterns):
         for pat in patterns:
-            m = re.search(pat, gcode, re.IGNORECASE)
+            m = re.search(pat, gcode, re.IGNORECASE | re.MULTILINE)
             if m:
                 return m.group(1).strip()
         return None
@@ -90,8 +121,12 @@ def parse_summary(gcode: str) -> dict:
                               r";\s*filament used \[mm\]\s*[:=]\s*([\d.]+)"),
         "nozzle_temp": search(r";\s*nozzle_temperature\s*[:=]\s*\[?([\d]+)",
                              r";\s*nozzle_temperature_initial_layer\s*[:=]\s*\[?([\d]+)"),
-        "bed_temp": search(r";\s*(?:hot_plate_temp|bed_temperature)\s*[:=]\s*\[?([\d]+)",
-                          r";\s*first_layer_bed_temperature\s*[:=]\s*\[?([\d]+)"),
+        # The ACTUAL commanded bed temp (M190 heat-and-wait / M140 set) — this is
+        # what the printer does, regardless of which plate's header temp applies.
+        # Fall back to the header only if no command is present.
+        "bed_temp": search(r"^M190\s+S(\d+)", r"^M140\s+S(\d+)",
+                          r";\s*(?:hot_plate_temp|bed_temperature)\s*[:=]\s*\[?([\d]+)"),
+        "bed_type": search(r";\s*curr_bed_type\s*[:=]\s*([^\n;]+)"),
         "layer_height": search(r";\s*layer_height\s*[:=]\s*([\d.]+)"),
     }
 
@@ -134,10 +169,13 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("stl", help="path to the STL to slice")
     ap.add_argument("--config", help="path to bambu.toml (default: search upward)")
+    ap.add_argument("--printer", help="use the bambu.<name>.toml profile")
     ap.add_argument("--output", help="output .gcode.3mf path (default: <stl>.gcode.3mf)")
     ap.add_argument("--machine", help="override [slice].machine preset name")
     ap.add_argument("--process", help="override [slice].process preset name")
     ap.add_argument("--filament", help="override [slice].filament preset name")
+    ap.add_argument("--bed-type", help="build-plate type, e.g. \"Textured PEI Plate\" "
+                    "(sets the bed temp); overrides [slice].bed_type")
     args = ap.parse_args()
 
     stl = Path(args.stl).expanduser().resolve()
@@ -145,7 +183,7 @@ def main() -> int:
         eprint(f"✗ STL not found: {stl}")
         return 1
 
-    cfg = load_config(args.config)
+    cfg = load_config(args.config, printer=args.printer)
     slicer_path, kind = find_slicer(cfg)
     if slicer_path is None:
         eprint("✗ No slicer found. Install Bambu Studio or OrcaSlicer, or set "
@@ -166,10 +204,22 @@ def main() -> int:
     if out.exists():
         out.unlink()
 
-    cmd = build_command(slicer_path, presets, stl, out, plate)
+    # Optional build-plate type → sets the bed temperature (Fix: Cool Plate 35C
+    # was the default and too cold for PLA on textured PEI). Cloned into the
+    # process preset because the CLI rejects a second process file.
+    bed_type_raw = args.bed_type or cfg.get("slice", {}).get("bed_type")
+    bed_type = None
+    proc_override = None
+    if bed_type_raw:
+        bed_type = BED_TYPES.get(bed_type_raw.strip().lower(), bed_type_raw.strip())
+        proc_override = make_bed_type_process(presets["process"][1], bed_type)
+
+    cmd = build_command(slicer_path, presets, stl, out, plate, proc_override)
     eprint(f"Slicing {stl.name} with {kind}:")
     for k in ("machine", "process", "filament"):
         eprint(f"  {k}: {presets[k][0]}")
+    if bed_type:
+        eprint(f"  bed_type: {bed_type}")
     eprint(f"  -> {out}")
 
     try:
@@ -178,6 +228,12 @@ def main() -> int:
     except subprocess.TimeoutExpired:
         eprint(f"✗ Slicer timed out after {SLICE_TIMEOUT}s")
         return 1
+    finally:
+        if proc_override is not None:
+            try:
+                proc_override.unlink()
+            except OSError:
+                pass
 
     if not out.is_file():
         eprint("✗ Slice failed — no output produced.")
@@ -213,7 +269,8 @@ def main() -> int:
     eprint(f"  filament   : {summary.get('filament_g')} g "
            f"({summary.get('filament_mm')} mm)")
     eprint(f"  temps      : nozzle {summary.get('nozzle_temp')}C / "
-           f"bed {summary.get('bed_temp')}C")
+           f"bed {summary.get('bed_temp')}C"
+           f"{' on ' + summary['bed_type'] if summary.get('bed_type') else ''}")
     eprint(f"  output     : {out} ({summary['size_bytes']} bytes)")
 
     print(json.dumps(summary, indent=2))

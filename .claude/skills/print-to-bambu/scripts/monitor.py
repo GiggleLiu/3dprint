@@ -33,13 +33,14 @@ def fmt(status: dict) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--config", help="path to bambu.toml (default: search upward)")
+    ap.add_argument("--printer", help="use the bambu.<name>.toml profile")
     ap.add_argument("--interval", type=float, default=4.0, help="poll seconds")
     ap.add_argument("--once", action="store_true", help="print one status and exit")
     ap.add_argument("--timeout-min", type=float, default=0,
                     help="give up after N minutes (0 = no limit)")
     args = ap.parse_args()
 
-    cfg = load_config(args.config)
+    cfg = load_config(args.config, printer=args.printer)
     printer = connect(cfg)
     seen_running = False
     start = time.time()
