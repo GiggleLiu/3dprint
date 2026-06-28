@@ -33,9 +33,10 @@ plate    = 1
 
 [print]
 # true if filament is fed from an AMS; false for a directly-fed external spool.
-# If you have an AMS loaded, this MUST be true, or the printer feeds from the
-# (empty) external path and extrudes nothing.
-use_ams = false
+# Defaults to true because most Bambu setups have an AMS — if yours is loaded this
+# MUST be true, or the printer feeds from the (empty) external path and extrudes
+# nothing. Set false only for a directly-fed external spool.
+use_ams = true
 # Which AMS slot (0-3) to print from when use_ams is true.
 ams_tray = 0
 

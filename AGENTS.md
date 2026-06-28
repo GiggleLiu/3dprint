@@ -57,9 +57,8 @@ open and follow the file directly.)
 ```
 .claude/skills/        # the skills (design-stl, print-to-bambu, onboard) + SKILL.md each
 docs/superpowers/specs/ # design notes for the skills
-examples/              # curated, tracked example models (e.g. hydrogen_molecule.py + .stl)
+examples/              # curated, tracked example builders + assets (hydrogen_molecule.py, model.py)
 local/                 # gitignored scratch: generated STLs & build artifacts
-model.py               # the design-stl builder for the current model (output is gitignored)
 bambu.toml.example     # placeholder printer config; copy to bambu.toml (gitignored) and fill in
 README.md              # human-facing overview
 ```
