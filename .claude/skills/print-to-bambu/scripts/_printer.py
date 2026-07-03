@@ -73,18 +73,74 @@ def _safe(fn, *args):
         return None
 
 
+def _raw_print(printer) -> dict:
+    dump = _safe(printer.mqtt_dump) or {}
+    return (dump.get("print", {}) or {})
+
+
+def _decode_dual_temp(value):
+    """Decode X2D/H2 packed extruder temp fields.
+
+    Dual-nozzle firmware may report an active extruder temp as a 32-bit packed
+    value: low 16 bits = current temp, high 16 bits = target temp. Inactive or
+    legacy fields are usually plain Celsius floats/ints.
+    """
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None, None
+    if n > 1000:
+        current = n & 0xFFFF
+        target = (n >> 16) & 0xFFFF
+        return current, target
+    return n, None
+
+
+def read_dual_extruders(printer) -> list[dict]:
+    pr = _raw_print(printer)
+    infos = (((pr.get("device") or {}).get("extruder") or {}).get("info") or [])
+    out = []
+    for item in infos:
+        current, target = _decode_dual_temp(item.get("temp"))
+        out.append({
+            "id": item.get("id"),
+            "temp": current,
+            "target": target,
+            "hnow": item.get("hnow"),
+            "htar": item.get("htar"),
+            "slot_now": item.get("snow"),
+            "slot_target": item.get("star"),
+        })
+    return out
+
+
 def read_status(printer) -> dict:
     """Snapshot the printer status, tolerating fields a model may not report."""
+    pr = _raw_print(printer)
     state = _safe(printer.get_state)
+    state_str = str(state) if state is not None else None
+    if not state_str or state_str.upper() == "UNKNOWN":
+        state_str = pr.get("gcode_state") or state_str
+
+    dual_extruders = read_dual_extruders(printer)
     return {
-        "state": str(state) if state is not None else None,
-        "percent": _safe(printer.get_percentage),
-        "remaining_min": _safe(printer.get_time),
-        "layer": _safe(printer.current_layer_num),
-        "total_layers": _safe(printer.total_layer_num),
+        "state": state_str,
+        "percent": _safe(printer.get_percentage) if pr.get("mc_percent") is None
+        else pr.get("mc_percent"),
+        "remaining_min": _safe(printer.get_time)
+        if pr.get("mc_remaining_time") is None else pr.get("mc_remaining_time"),
+        "layer": _safe(printer.current_layer_num) if pr.get("layer_num") is None
+        else pr.get("layer_num"),
+        "total_layers": _safe(printer.total_layer_num)
+        if pr.get("total_layer_num") is None else pr.get("total_layer_num"),
         "nozzle_temp": _safe(printer.get_nozzle_temperature),
-        "bed_temp": _safe(printer.get_bed_temperature),
-        "file": _safe(printer.get_file_name),
+        "nozzle_target": pr.get("nozzle_target_temper"),
+        "bed_temp": _safe(printer.get_bed_temperature)
+        if pr.get("bed_temper") is None else pr.get("bed_temper"),
+        "bed_target": pr.get("bed_target_temper"),
+        "file": _safe(printer.get_file_name) or pr.get("gcode_file")
+        or pr.get("subtask_name"),
+        "dual_extruders": dual_extruders,
     }
 
 
@@ -170,6 +226,17 @@ def load_ams_tray(printer, tray: int, temp: int = 220, timeout: float = 150.0) -
             return True
         _t.sleep(3)
     return False
+
+
+def start_project_file(printer, payload: dict) -> bool:
+    """Start a 3MF project with an explicit MQTT project_file payload.
+
+    bambulabs-api's start_print_3mf() uses a legacy payload that is not rich
+    enough for newer dual-nozzle families. Keep the raw publish isolated here so
+    send.py can build model-specific payloads without reaching into private API
+    methods itself.
+    """
+    return _publish(printer, {"print": payload})
 
 
 def disconnect(printer) -> None:

@@ -145,6 +145,23 @@ compatible presets), then save it as `bambu.<name>.toml` and fill in ip/serial/c
 - **Filament grams look wrong** → Bambu's CLI writes weight 0.00; `slice.py`
   re-computes it from length × diameter × density (marked `filament_g_estimated`).
 - **`use_ams` mismatch** → set `[print].use_ams` to match (AMS vs external spool).
+- **X2D/H2 legacy nozzle target says 0°C while a print is RUNNING** → do not
+  assume the print is cold. Dual-nozzle firmware may report the inactive/legacy
+  nozzle in `nozzle_target_temper` while the active nozzle lives under
+  `device.extruder.info[*].temp` as a packed current/target value. `monitor.py`
+  and `send.py` decode and display `E0` / `E1`; use those fields before calling
+  a run dry. If the active extruder is genuinely cold, suspect a bad
+  `project_file` payload and capture `device.extruder.info`, `tray_now`,
+  `mc_percent`, and the exact start payload. Do not start a second job until the
+  printer is idle or the user explicitly stops the current run at the printer.
+- **X2D/H2 print heats but AMS does not feed the requested slot** → check the
+  project-file filament IDs. `Metadata/plate_1.json` can use zero-based display
+  IDs (`filament_ids: [0]`) while `Metadata/slice_info.config` and
+  `Metadata/filament_sequence.json` use the firmware-facing ID (`1`). The MQTT
+  `ams_mapping` / `ams_mapping2` must be keyed to the slice/sequence ID, not the
+  plate display ID. For a one-filament X2D file whose sequence is `[1]` and the
+  desired AMS tray is `3`, send `ams_mapping: [-1, 3]` and
+  `ams_mapping2: [{ams_id:255, slot_id:255}, {ams_id:0, slot_id:3}]`.
 
 ## Safety / distribution
 

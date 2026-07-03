@@ -19,16 +19,20 @@ the configured source is empty or mismatched it refuses to start (override with
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
+import time
+import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _config import eprint, load_config  # noqa: E402
 from _printer import (  # noqa: E402
-    connect, disconnect, load_ams_tray, read_sources, read_status)
+    connect, disconnect, load_ams_tray, read_sources, read_status,
+    start_project_file)
 
 
 def read_plate_meta(threemf: Path, plate: int) -> dict:
@@ -56,6 +60,162 @@ def read_plate_meta(threemf: Path, plate: int) -> dict:
         "bed_type": find(r";\s*curr_bed_type\s*[:=]\s*([^\n;]+)"),
         "nozzle_temp": find(r"^M109\s+S(\d+)", r";\s*nozzle_temperature\s*[:=]\s*\[?(\d+)"),
     }
+
+
+def read_project_meta(threemf: Path, plate: int) -> dict:
+    """Read project-file metadata needed for a direct MQTT project_file start."""
+    with zipfile.ZipFile(threemf) as z:
+        names = set(z.namelist())
+        gcode_path = f"Metadata/plate_{plate}.gcode"
+        if gcode_path not in names:
+            gcode_path = next((n for n in names if n.endswith(".gcode")), gcode_path)
+        gcode = z.read(gcode_path)
+
+        md5_path = f"{gcode_path}.md5"
+        if md5_path in names:
+            md5 = z.read(md5_path).decode("utf-8", "replace").strip()
+        else:
+            md5 = hashlib.md5(gcode).hexdigest().upper()
+
+        plate_json_path = f"Metadata/plate_{plate}.json"
+        plate_json = {}
+        if plate_json_path in names:
+            try:
+                plate_json = json.loads(z.read(plate_json_path))
+            except json.JSONDecodeError:
+                plate_json = {}
+
+        slice_filament_ids = []
+        if "Metadata/slice_info.config" in names:
+            try:
+                root = ET.fromstring(z.read("Metadata/slice_info.config"))
+                for elem in root.findall(".//filament"):
+                    fid = elem.get("id")
+                    if fid is not None:
+                        slice_filament_ids.append(int(fid))
+            except (ET.ParseError, TypeError, ValueError):
+                slice_filament_ids = []
+
+        sequence_filament_ids = []
+        if "Metadata/filament_sequence.json" in names:
+            try:
+                sequence_data = json.loads(z.read("Metadata/filament_sequence.json"))
+                sequence = (sequence_data.get(f"plate_{plate}", {}) or {}).get("sequence")
+                if isinstance(sequence, list):
+                    sequence_filament_ids = [int(v) for v in sequence]
+            except (json.JSONDecodeError, TypeError, ValueError):
+                sequence_filament_ids = []
+
+        project_settings = {}
+        if "Metadata/project_settings.config" in names:
+            try:
+                project_settings = json.loads(
+                    z.read("Metadata/project_settings.config"))
+            except json.JSONDecodeError:
+                project_settings = {}
+
+    return {
+        "gcode_path": gcode_path,
+        "md5": md5,
+        "plate_json": plate_json,
+        "slice_filament_ids": slice_filament_ids,
+        "sequence_filament_ids": sequence_filament_ids,
+        "project_settings": project_settings,
+    }
+
+
+def is_dual_nozzle_family(machine: str | None) -> bool:
+    """True for printer families whose project_file payload needs H2/X2 routing."""
+    m = (machine or "").lower()
+    return any(token in m for token in ("x2d", "h2d", "h2c", "h2s"))
+
+
+def _plate_filament_ids(project_meta: dict) -> list[int]:
+    # X2D/H2 firmware keys the print-command mapping to the filament IDs used
+    # by slice_info.config / filament_sequence.json. plate_1.json is zero-based
+    # display metadata; using it mapped AMS slot 3 onto index 0 while the G-code
+    # used filament 1, so firmware fell back to another loaded slot.
+    for key in ("sequence_filament_ids", "slice_filament_ids"):
+        ids = project_meta.get(key)
+        if isinstance(ids, list) and ids:
+            out = []
+            for value in ids:
+                try:
+                    out.append(int(value))
+                except (TypeError, ValueError):
+                    pass
+            if out:
+                return sorted(set(out))
+
+    ids = project_meta.get("plate_json", {}).get("filament_ids")
+    if not isinstance(ids, list) or not ids:
+        return [0]
+    out = []
+    for value in ids:
+        try:
+            out.append(int(value))
+        except (TypeError, ValueError):
+            pass
+    return out or [0]
+
+
+def build_project_payload(remote_name: str, plate: int, use_ams: bool,
+                          ams_tray: int, project_meta: dict,
+                          dual_nozzle_family: bool) -> dict:
+    """Build a project_file payload.
+
+    Older printers accepted bambulabs-api's compact ams_mapping=[slot] form.
+    X2D/H2-family firmware is stricter: it expects mapping positions to line up
+    with the project filament ids, plus the parallel ams_mapping2 table.
+    """
+    filament_ids = _plate_filament_ids(project_meta)
+    map_len = max(filament_ids) + 1
+    ams_mapping = [-1] * map_len
+    ams_mapping2 = [{"ams_id": 255, "slot_id": 255} for _ in range(map_len)]
+    if use_ams:
+        ams_id, slot_id = divmod(int(ams_tray), 4)
+        for fid in filament_ids:
+            ams_mapping[fid] = int(ams_tray)
+            ams_mapping2[fid] = {"ams_id": ams_id, "slot_id": slot_id}
+
+    subtask = re.sub(r"(\.gcode)?\.3mf$", "", remote_name, flags=re.IGNORECASE)
+    # BambuStudio-style fresh submission IDs. task_id=0 can make the printer
+    # treat a reprint as a continuation and never cleanly transition into the
+    # real print path on newer firmware.
+    submission_id = str(int(time.time() * 1000) % 2_147_483_647 or 1)
+    payload = {
+        "sequence_id": "20000",
+        "command": "project_file",
+        "param": project_meta["gcode_path"],
+        "url": f"ftp://{remote_name}",
+        "file": remote_name,
+        # Leave empty to match Bambuddy's current LAN dispatch behavior and
+        # avoid activating validation with the wrong digest type.
+        "md5": "",
+        "bed_type": "auto",
+        "timelapse": False,
+        "bed_leveling": True,
+        "bed_levelling": True,
+        "auto_bed_leveling": 1,
+        "flow_cali": False,
+        "vibration_cali": True,
+        "layer_inspect": False,
+        "use_ams": bool(use_ams),
+        "cfg": "0",
+        "extrude_cali_flag": 0,
+        "extrude_cali_manual_mode": 0,
+        "nozzle_offset_cali": 0,
+        "subtask_name": subtask,
+        "profile_id": "0",
+        "project_id": submission_id,
+        "subtask_id": submission_id,
+        "task_id": submission_id,
+        "ams_mapping": ams_mapping,
+    }
+    if dual_nozzle_family:
+        payload["ams_mapping2"] = ams_mapping2
+
+    return payload
 
 
 def build_print_plan(meta: dict, sources: dict, use_ams: bool, ams_tray: int,
@@ -135,11 +295,17 @@ def status_gate(status: dict) -> dict:
     """Return printer-status blocks/warnings for the pre-start confirmation."""
     blocks, warnings = [], []
     state = (status.get("state") or "").upper()
+    if not state or state == "UNKNOWN":
+        blocks.append("printer live status is UNKNOWN; wait for a real status update.")
     if state in {"RUNNING", "PAUSE", "PAUSED", "PREPARE", "PREPARING", "HEATING"}:
         blocks.append(f"printer is not idle; current state is {state}.")
 
     try:
-        nozzle = float(status.get("nozzle_temp") or 0)
+        nozzle_values = [float(status.get("nozzle_temp") or 0)]
+        nozzle_values.extend(
+            float(ex.get("temp") or 0)
+            for ex in status.get("dual_extruders") or [])
+        nozzle = max(nozzle_values or [0.0])
         bed = float(status.get("bed_temp") or 0)
     except (TypeError, ValueError):
         nozzle, bed = 0.0, 0.0
@@ -153,6 +319,24 @@ def status_gate(status: dict) -> dict:
     return {"blocks": blocks, "warnings": warnings, "ok": not blocks}
 
 
+def read_settled_status(printer, timeout: float = 12.0) -> dict:
+    """Wait briefly for a meaningful MQTT status instead of a blank snapshot."""
+    deadline = time.time() + timeout
+    last = {}
+    while time.time() < deadline:
+        last = read_status(printer)
+        state = (last.get("state") or "").upper()
+        has_live_fields = (
+            last.get("percent") is not None
+            or last.get("bed_temp") not in (None, 0, 0.0)
+            or bool(last.get("dual_extruders"))
+        )
+        if state and state != "UNKNOWN" and has_live_fields:
+            return last
+        time.sleep(0.5)
+    return last
+
+
 def emit_status(status: dict, sources: dict) -> None:
     """Print the live printer state that must be shown before start."""
     eprint("── printer status ───────────────────────────────")
@@ -161,6 +345,13 @@ def emit_status(status: dict, sources: dict) -> None:
     eprint(f"  layer    : {status.get('layer')}/{status.get('total_layers')}")
     eprint(f"  temps    : nozzle {status.get('nozzle_temp')}°C / "
            f"bed {status.get('bed_temp')}°C")
+    for ex in status.get("dual_extruders") or []:
+        if ex.get("temp") is None:
+            continue
+        target = ex.get("target")
+        eprint(f"  extruder {ex.get('id')} : {ex.get('temp')}°C"
+               f"{' -> ' + str(target) + '°C' if target is not None else ''}"
+               f"  slot {ex.get('slot_now')}")
     eprint(f"  file     : {status.get('file') or '-'}")
     eprint(f"  AMS      : {'present' if sources.get('ams_present') else 'not detected'}")
     eprint(f"  tray_now : {sources.get('tray_now')} (255 = nothing at nozzle)")
@@ -255,7 +446,8 @@ def main() -> int:
             # Live status confirmation gate. This runs before upload and before
             # any command that can heat, load filament, or start motion.
             meta = read_plate_meta(threemf, plate)
-            status = read_status(printer)
+            project_meta = read_project_meta(threemf, plate)
+            status = read_settled_status(printer)
             sources = read_sources(printer)
             bed_type_set = bool(cfg.get("slice", {}).get("bed_type"))
             plan = build_print_plan(meta, sources, use_ams, ams_tray, bed_type_set)
@@ -326,8 +518,20 @@ def main() -> int:
 
             ams_mapping = [ams_tray] if use_ams else [0]
             eprint(f"Starting print: plate {plate}, {plan['source']} ...")
-            ok = printer.start_print(remote_name, plate, use_ams=use_ams,
-                                     ams_mapping=ams_mapping)
+            machine = (cfg.get("slice", {}) or {}).get("machine", "")
+            if is_dual_nozzle_family(machine):
+                payload = build_project_payload(
+                    remote_name, plate, use_ams, ams_tray, project_meta,
+                    dual_nozzle_family=True)
+                ok = start_project_file(printer, payload)
+                result["start_mode"] = "direct_project_file"
+                result["ams_mapping"] = payload.get("ams_mapping")
+                result["ams_mapping2"] = payload.get("ams_mapping2")
+            else:
+                ok = printer.start_print(remote_name, plate, use_ams=use_ams,
+                                         ams_mapping=ams_mapping)
+                result["start_mode"] = "bambulabs_api"
+                result["ams_mapping"] = ams_mapping
             result["started"] = bool(ok)
             result["source"] = plan["source"]
             if ok:

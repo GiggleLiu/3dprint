@@ -18,15 +18,32 @@ from _printer import connect, disconnect, read_status  # noqa: E402
 TERMINAL = {"FINISH", "FAILED"}
 
 
+def fmt_extruders(status: dict) -> str:
+    parts = []
+    for ex in status.get("dual_extruders") or []:
+        if ex.get("temp") is None:
+            continue
+        target = ex.get("target")
+        if target is not None:
+            parts.append(f"E{ex.get('id')} {ex.get('temp')}->{target}C")
+        else:
+            parts.append(f"E{ex.get('id')} {ex.get('temp')}C")
+    return " ".join(parts)
+
+
 def fmt(status: dict) -> str:
     pct = status.get("percent")
     rem = status.get("remaining_min")
     layer, total = status.get("layer"), status.get("total_layers")
+    extruders = fmt_extruders(status)
+    nozzle = (extruders or
+              f"nozzle {status.get('nozzle_temp')}C"
+              f"{'->' + str(status.get('nozzle_target')) + 'C' if status.get('nozzle_target') is not None else ''}")
     return (f"{status.get('state'):<8} "
             f"{pct if pct is not None else '?'}%  "
             f"layer {layer if layer is not None else '?'}/{total if total is not None else '?'}  "
             f"~{rem if rem is not None else '?'} min left  "
-            f"nozzle {status.get('nozzle_temp')}C bed {status.get('bed_temp')}C  "
+            f"{nozzle} bed {status.get('bed_temp')}C  "
             f"[{status.get('file') or '-'}]")
 
 
