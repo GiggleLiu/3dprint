@@ -24,21 +24,34 @@ Scripts print a human summary on stderr and JSON on stdout.
    (orbit/zoom) so the user can check the model before printing.
 3. **Slice** — `scripts/slice.py <stl>` → writes `<stl>.gcode.3mf` and a summary
    (print time, filament grams, nozzle/bed temps).
-4. **CONFIRM (required)** — show the user the slice summary **and the resolved
-   print parameters** (filament source, plate/bed, nozzle) and WAIT for explicit
-   approval. Slicing is automatic; **printing is not**.
-5. **Send** — only after approval: `scripts/send.py <stl>.gcode.3mf`. Add
-   `--dry-run` to upload without starting (safe test). Before it starts a real
-   print, `send.py` runs the **parameter gate** (below) and refuses to start if
-   the configured filament source is empty/mismatched.
-6. **Monitor** — `scripts/monitor.py` streams progress until FINISH / FAILED.
+4. **Live status check (required)** — before any real print, run
+   `scripts/send.py <stl>.gcode.3mf` **without** `--status-confirmed`. It prints
+   the live printer status plus resolved print parameters, then refuses before
+   upload, AMS preload, heating, or start.
+5. **CONFIRM (required)** — show the user the slice summary **and the live
+   printer status / resolved print parameters** (printer state, temps, current
+   file, AMS/external source, plate/bed, nozzle). WAIT for explicit approval of
+   this exact slice and current printer state. Slicing/status checks are
+   automatic; **printing is not**.
+6. **Send** — only after approval: `scripts/send.py <stl>.gcode.3mf
+   --status-confirmed`. Add `--dry-run` to upload without starting (safe test).
+   Before it starts a real print, `send.py` re-runs the live status and
+   **parameter gate** (below), refuses if the printer is busy or the configured
+   filament source is empty/mismatched, and only then may preload AMS/start.
+7. **Monitor** — `scripts/monitor.py` streams progress until FINISH / FAILED.
 
 ## The confirmation gate (do not skip)
 
 Starting a print heats the printer and extrudes plastic, often unattended. After
-slicing, present print time + filament weight + temps and stop for a yes. If the
-user has not explicitly approved THIS slice, do not run `send.py` without
-`--dry-run`. Violating the letter of this gate violates its spirit.
+slicing, present print time + filament weight + temps, then run the live status
+check and present the printer status block. Stop for a yes after both the slice
+and live status are visible. If the user has not explicitly approved THIS slice
+and THIS live printer status, do not run `send.py --status-confirmed`. Violating
+the letter of this gate violates its spirit.
+
+`send.py` enforces this mechanically: without `--status-confirmed`, a real print
+command prints the status/parameter blocks and exits before upload, AMS preload,
+heating, or print start.
 
 ## The parameter-confirmation gate (key params must match reality)
 
@@ -69,10 +82,12 @@ only displays them — it does not re-prompt):
 > until `tray_now` matches before starting. If the slot won't feed (spool not
 > threaded into the AMS), it refuses to start rather than print dry.
 
-`send.py` prints a concise `── print parameters ──` block (source / filament /
-bed / nozzle); stable params appear as plain info, only genuine per-print
-problems get ⚠/✗. Show it to the user as part of CONFIRM. Override a ✗ block only
-deliberately with `--force`.
+`send.py` prints a concise `── printer status ──` block (state / progress /
+temps / current file / AMS slots / external spool) and `── print parameters ──`
+block (source / filament / bed / nozzle). Stable params appear as plain info,
+only genuine per-print problems get ⚠/✗. Show both blocks to the user as part of
+CONFIRM. Printer-status ✗ blocks are not force-overridable; override a parameter
+✗ block only deliberately with `--force`.
 
 ## Scripts
 
@@ -83,7 +98,8 @@ deliberately with `--force`.
 | `preflight.py` | check config, slicer, preset **compatibility**, library, live API → JSON |
 | `view.py <stl>` | self-contained 3D HTML viewer (`--open` to launch) |
 | `slice.py <stl>` | STL → `.gcode.3mf` + summary (time, filament, temps) |
-| `send.py <3mf>` | upload over LAN + start print (`--dry-run` = upload only) |
+| `send.py <3mf>` | live status/parameter check; refuses to start until rerun with `--status-confirmed` |
+| `send.py <3mf> --status-confirmed` | upload over LAN + start print (`--dry-run` = upload only) |
 | `monitor.py` | stream live print status until done |
 | `use_printer.py` | switch between `bambu.<name>.toml` profiles (`--list` / `<name>` / `--auto`) |
 

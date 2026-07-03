@@ -5,6 +5,9 @@ bambu.toml
 bambu.*.toml
 !bambu.toml.example
 
+# Local printer quickstart with real IP/serial filled in — not for the public repo
+docs/x2d-guide.typ
+
 # Slicer build output + generated viewers + design previews
 *.gcode
 *.gcode.3mf

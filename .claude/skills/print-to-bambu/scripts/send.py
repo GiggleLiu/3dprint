@@ -5,8 +5,10 @@ REQUIRES the printer in Developer/LAN Mode (print initiation is otherwise gated
 by Bambu's Authorization Control). With --dry-run, the file is uploaded but the
 print is NOT started — the safe end-to-end test path.
 
-The slice summary should already have been shown to and confirmed by the user
-before this runs (the confirmation gate lives in SKILL.md, not here).
+The slice summary and live printer status should already have been shown to and
+confirmed by the user before this runs with --status-confirmed. Without that
+flag, send.py prints the live status/parameter block and exits before upload,
+preload, or start.
 
 Before starting a real print, send.py also runs a *parameter gate*: it reads the
 printer's live filament sources (AMS slots / external spool) and reconciles them
@@ -129,6 +131,70 @@ def build_print_plan(meta: dict, sources: dict, use_ams: bool, ams_tray: int,
     }
 
 
+def status_gate(status: dict) -> dict:
+    """Return printer-status blocks/warnings for the pre-start confirmation."""
+    blocks, warnings = [], []
+    state = (status.get("state") or "").upper()
+    if state in {"RUNNING", "PAUSE", "PAUSED", "PREPARE", "PREPARING", "HEATING"}:
+        blocks.append(f"printer is not idle; current state is {state}.")
+
+    try:
+        nozzle = float(status.get("nozzle_temp") or 0)
+        bed = float(status.get("bed_temp") or 0)
+    except (TypeError, ValueError):
+        nozzle, bed = 0.0, 0.0
+    if nozzle > 50 or bed > 45:
+        warnings.append(f"printer is already warm: nozzle {nozzle:g}°C, bed {bed:g}°C.")
+
+    active_file = (status.get("file") or "").strip()
+    if active_file:
+        warnings.append(f"printer reports current file: {active_file}.")
+
+    return {"blocks": blocks, "warnings": warnings, "ok": not blocks}
+
+
+def emit_status(status: dict, sources: dict) -> None:
+    """Print the live printer state that must be shown before start."""
+    eprint("── printer status ───────────────────────────────")
+    eprint(f"  state    : {status.get('state') or 'UNKNOWN'}")
+    eprint(f"  progress : {status.get('percent') if status.get('percent') is not None else '?'}%")
+    eprint(f"  layer    : {status.get('layer')}/{status.get('total_layers')}")
+    eprint(f"  temps    : nozzle {status.get('nozzle_temp')}°C / "
+           f"bed {status.get('bed_temp')}°C")
+    eprint(f"  file     : {status.get('file') or '-'}")
+    eprint(f"  AMS      : {'present' if sources.get('ams_present') else 'not detected'}")
+    eprint(f"  tray_now : {sources.get('tray_now')} (255 = nothing at nozzle)")
+    loaded = [t for t in sources.get("trays", []) if not t.get("empty")]
+    if loaded:
+        for tray in loaded:
+            color = (tray.get("color") or "")[:6] or "?"
+            eprint(f"  slot {tray['slot']:<2}  : {tray.get('type') or '?'} #{color}")
+    else:
+        eprint("  slots    : all empty")
+    ext = sources.get("external_type") or ""
+    eprint(f"  external : {ext or 'empty'}")
+    eprint("──────────────────────────────────────────────────")
+
+
+def emit_plan(plan: dict, gate: dict | None = None) -> None:
+    """Print the resolved print parameters and any status/parameter issues."""
+    eprint("── print parameters ──────────────────────────────")
+    eprint(f"  source   : {plan['source']}")
+    eprint(f"  filament : {plan['filament']}")
+    eprint(f"  bed      : {plan['bed']}")
+    eprint(f"  nozzle   : {plan['nozzle']}")
+    if gate:
+        for w in gate["warnings"]:
+            eprint(f"  ⚠ {w}")
+        for b in gate["blocks"]:
+            eprint(f"  ✗ {b}")
+    for w in plan["warnings"]:
+        eprint(f"  ⚠ {w}")
+    for b in plan["blocks"]:
+        eprint(f"  ✗ {b}")
+    eprint("──────────────────────────────────────────────────")
+
+
 def _verify_upload(printer, remote_name: str) -> bool:
     """Confirm the file is actually on the printer after STOR.
 
@@ -152,6 +218,9 @@ def main() -> int:
     ap.add_argument("--printer", help="use the bambu.<name>.toml profile")
     ap.add_argument("--dry-run", action="store_true",
                     help="upload but do NOT start the print")
+    ap.add_argument("--status-confirmed", action="store_true",
+                    help="assert the live printer status + resolved print "
+                    "parameters were shown to and approved by the user")
     ap.add_argument("--remote-name", help="filename to store on the printer "
                     "(default: basename of the 3mf)")
     ap.add_argument("--ams-tray", type=int,
@@ -182,6 +251,40 @@ def main() -> int:
     result: dict = {"uploaded": False, "started": False, "remote_name": remote_name,
                     "dry_run": args.dry_run}
     try:
+        if not args.dry_run:
+            # Live status confirmation gate. This runs before upload and before
+            # any command that can heat, load filament, or start motion.
+            meta = read_plate_meta(threemf, plate)
+            status = read_status(printer)
+            sources = read_sources(printer)
+            bed_type_set = bool(cfg.get("slice", {}).get("bed_type"))
+            plan = build_print_plan(meta, sources, use_ams, ams_tray, bed_type_set)
+            gate = status_gate(status)
+            result["status"] = status
+            result["sources"] = sources
+            result["status_gate"] = gate
+            result["plan"] = plan
+            emit_status(status, sources)
+            emit_plan(plan, gate)
+
+            if gate["blocks"]:
+                eprint("✗ Not starting: printer status is not safe to start. "
+                       "Resolve the status block above.")
+                print(json.dumps(result, indent=2))
+                return 1
+            if plan["blocks"] and not args.force:
+                eprint("✗ Not starting: the parameter gate found a blocking "
+                       "mismatch above. Fix it, or pass --force to override.")
+                print(json.dumps(result, indent=2))
+                return 1
+            if not args.status_confirmed:
+                eprint("✗ Not starting: live printer status has not been "
+                       "confirmed by the user. Show the status and parameters "
+                       "above, wait for explicit approval, then rerun with "
+                       "--status-confirmed.")
+                print(json.dumps(result, indent=2))
+                return 1
+
         eprint(f"Uploading {threemf.name} -> {remote_name} ...")
         with threemf.open("rb") as fh:
             ret = printer.upload_file(fh, remote_name)  # closes fh internally
@@ -204,29 +307,6 @@ def main() -> int:
         if args.dry_run:
             eprint("• --dry-run: NOT starting the print.")
         else:
-            # Parameter-confirmation gate: reconcile the slice + config against
-            # the printer's live filament sources before extruding anything.
-            meta = read_plate_meta(threemf, plate)
-            sources = read_sources(printer)
-            bed_type_set = bool(cfg.get("slice", {}).get("bed_type"))
-            plan = build_print_plan(meta, sources, use_ams, ams_tray, bed_type_set)
-            result["plan"] = plan
-            eprint("── print parameters ──────────────────────────────")
-            eprint(f"  source   : {plan['source']}")
-            eprint(f"  filament : {plan['filament']}")
-            eprint(f"  bed      : {plan['bed']}")
-            eprint(f"  nozzle   : {plan['nozzle']}")
-            for w in plan["warnings"]:
-                eprint(f"  ⚠ {w}")
-            for b in plan["blocks"]:
-                eprint(f"  ✗ {b}")
-            eprint("──────────────────────────────────────────────────")
-            if plan["blocks"] and not args.force:
-                eprint("✗ Not starting: the parameter gate found a blocking "
-                       "mismatch above. Fix it, or pass --force to override.")
-                print(json.dumps(result, indent=2))
-                return 1
-
             # Pre-load the AMS slot to the nozzle. A print with use_ams alone does
             # NOT reliably trigger the load (printer prints dry, tray_now=255), so
             # we load it explicitly and confirm before starting.
