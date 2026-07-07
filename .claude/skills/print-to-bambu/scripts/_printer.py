@@ -223,7 +223,16 @@ def _tray_loaded(printer, tray: int) -> bool:
     return any(item.get("snow") == packed for item in infos)
 
 
-def load_ams_tray(printer, tray: int, temp: int = 220, timeout: float = 150.0) -> bool:
+def _ams_status(printer) -> int:
+    d = _safe(printer.mqtt_dump) or {}
+    try:
+        return int((d.get("print", {}) or {}).get("ams_status") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def load_ams_tray(printer, tray: int, temp: int = 220, timeout: float = 240.0,
+                  refresh: bool = False) -> bool:
     """Load a specific AMS slot to the nozzle and wait until it's actually there.
 
     bambulabs-api's load_filament_spool() hardcodes target=255 (external spool),
@@ -231,22 +240,50 @@ def load_ams_tray(printer, tray: int, temp: int = 220, timeout: float = 150.0) -
     SILENTLY IGNORES the legacy target-only form — it requires the explicit
     ams_id + slot_id fields Bambu Studio sends — so we always send the full
     Studio-style payload (old firmware ignores the extra keys and uses target).
-    A print started with use_ams + ams_mapping does NOT reliably trigger this
-    load on its own (the printer leaves tray_now=255 and prints dry), so we
-    pre-load explicitly and confirm the tray is at a nozzle before printing.
-    Returns True once loaded.
+
+    refresh=True re-runs the load even when the state says the tray is at the
+    nozzle. The X2D's end-of-print sequence cuts + retracts the filament but
+    can leave BOTH tray_now and extruder snow stale at "loaded" — trusting them
+    across a job boundary printed a whole job with no filament. A refresh load
+    on an actually-loaded slot is a quick cut/re-feed/purge (~1 min).
+
+    The command gets no error when the firmware is in a busy window (e.g. right
+    after an unload) — it is silently dropped — so we resend until the firmware
+    visibly acts (tray_tar / ams_status), then wait for the flow to finish
+    (tray at nozzle + filament-change flow idle). Returns True once loaded.
     """
     import time as _t
-    if _tray_loaded(printer, tray):
-        return True  # already loaded
+    if not refresh and _tray_loaded(printer, tray):
+        return True  # already loaded (only trusted mid-session)
     ams_id, slot_id = divmod(int(tray), 4)
-    _publish(printer, {"print": {"command": "ams_change_filament",
-                                 "ams_id": ams_id, "slot_id": slot_id,
-                                 "target": int(tray),
-                                 "curr_temp": int(temp), "tar_temp": int(temp)}})
+    payload = {"print": {"command": "ams_change_filament",
+                         "ams_id": ams_id, "slot_id": slot_id,
+                         "target": int(tray),
+                         "curr_temp": int(temp), "tar_temp": int(temp)}}
+
+    acked = False
+    for _attempt in range(4):
+        _publish(printer, payload)
+        ack_deadline = _t.time() + 15
+        while _t.time() < ack_deadline:
+            d = _safe(printer.mqtt_dump) or {}
+            ams = ((d.get("print", {}) or {}).get("ams", {}) or {})
+            in_change = (_ams_status(printer) >> 8) == 1
+            if str(ams.get("tray_tar")) == str(int(tray)) and \
+                    (in_change or filament_change_busy(printer)):
+                acked = True
+                break
+            _t.sleep(2)
+        if acked:
+            break
+    if not acked:
+        return False
+
     deadline = _t.time() + timeout
     while _t.time() < deadline:
-        if _tray_loaded(printer, tray):
+        if _tray_loaded(printer, tray) \
+                and (_ams_status(printer) >> 8) != 1 \
+                and not filament_change_busy(printer):
             return True
         _t.sleep(3)
     return False
