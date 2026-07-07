@@ -67,12 +67,27 @@ only displays them — it does not re-prompt):
   The gate only warns if it was **never set** (setup is incomplete).
 - **Has an AMS?** — `[print].use_ams`. A hardware fact; confirm at setup.
 
+**Chosen every print** (the human decides these per job — never defaulted):
+
+- **Which AMS slot (= which color)** — a per-print aesthetic choice, NOT a
+  config value. At CONFIRM, show the live AMS slots (type + color) from the
+  status block and ask the user which to print from, then pass `--ams-tray N`
+  explicitly. `send.py` refuses to start without it (a `[print].ams_tray` in
+  the config is only surfaced as a suggestion).
+- **Supports** — derived, not asked: `slice.py` measures how much of the sliced
+  job prints over air and automatically re-slices with tree supports when it
+  exceeds the threshold. Only mention it to the user if the warning persists
+  WITH supports (real droop risk) or they have an aesthetic reason to refuse
+  supports.
+
 **Re-checked every print** (volatile — the gate validates these live and can
 **block**, because they change between jobs):
 
-- **Chosen filament slot is actually loaded** — `[print].ams_tray`. `send.py` reads
-  the AMS/external state and **refuses to start** if that source is empty (e.g.
-  `use_ams=false` while filament is only in the AMS → the printer extrudes nothing).
+- **Chosen filament slot is actually loaded** — `send.py` reads the AMS/external
+  state and **refuses to start** if that source is empty (e.g. `use_ams=false`
+  while filament is only in the AMS → the printer extrudes nothing). On
+  printers that report it, the extruder filament-presence sensor is also
+  checked (see the stale-state pitfall below).
 - **Filament type matches the slice** — PLA slice vs a PETG/support slot → ⚠.
 
 > **AMS auto-load.** A print started with `use_ams` + `ams_mapping` does **not**

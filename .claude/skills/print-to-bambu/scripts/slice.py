@@ -246,6 +246,118 @@ def estimate_weight_g(slicer: Path, filament_json: Path, length_mm: float) -> fl
     return round(volume_mm3 * density / 1000.0, 2)  # mm^3 * g/cm^3 / 1000 = g
 
 
+def slice_and_analyze(slicer_path: Path, kind: str, presets: dict, stl: Path,
+                      out: Path, plate: int, bed_type_raw: str | None,
+                      support: bool) -> dict | None:
+    """Run the slicer once and analyze the result. Returns the summary dict,
+    or None if the slicer produced no output."""
+    if out.exists():
+        out.unlink()
+
+    # Optional build-plate type → sets the bed temperature (Fix: Cool Plate 35C
+    # was the default and too cold for PLA on textured PEI). Cloned into the
+    # process preset because the CLI rejects a second process file.
+    bed_type = None
+    proc_override = None
+    proc_extra: dict = {}
+    if bed_type_raw:
+        bed_type = BED_TYPES.get(bed_type_raw.strip().lower(), bed_type_raw.strip())
+        proc_extra["curr_bed_type"] = bed_type
+    if support:
+        proc_extra["enable_support"] = "1"
+        proc_extra["support_type"] = "tree(auto)"
+        # Bambu's default skips SMALL overhang patches — fatal for voxel/stepped
+        # models whose overhangs are all small (learned from a drooped print).
+        proc_extra["support_remove_small_overhang"] = "0"
+    if proc_extra:
+        proc_override = make_process_override(presets["process"][1], proc_extra)
+
+    cmd = build_command(slicer_path, presets, stl, out, plate, proc_override)
+    eprint(f"Slicing {stl.name} with {kind}:")
+    for k in ("machine", "process", "filament"):
+        eprint(f"  {k}: {presets[k][0]}")
+    if bed_type:
+        eprint(f"  bed_type: {bed_type}")
+    if support:
+        eprint("  supports : tree(auto)")
+    eprint(f"  -> {out}")
+
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=SLICE_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        eprint(f"✗ Slicer timed out after {SLICE_TIMEOUT}s")
+        return None
+    finally:
+        if proc_override is not None:
+            try:
+                proc_override.unlink()
+            except OSError:
+                pass
+
+    if not out.is_file():
+        eprint("✗ Slice failed — no output produced.")
+        eprint("--- slicer stdout (tail) ---")
+        eprint("\n".join(proc.stdout.splitlines()[-25:]))
+        eprint("--- slicer stderr (tail) ---")
+        eprint("\n".join(proc.stderr.splitlines()[-25:]))
+        return None
+
+    gcode = _gcode_text(out, plate)
+    summary = parse_summary(gcode) if gcode else {}
+
+    # Bambu's CLI leaves weight at 0.00; estimate from length when needed.
+    weight = summary.get("filament_g")
+    try:
+        weight_bad = weight is None or float(weight) == 0.0
+    except ValueError:
+        weight_bad = True
+    if weight_bad and summary.get("filament_mm"):
+        est = estimate_weight_g(slicer_path, presets["filament"][1],
+                                float(summary["filament_mm"]))
+        if est is not None:
+            summary["filament_g"] = f"{est}"
+            summary["filament_g_estimated"] = True
+
+    summary["output"] = str(out)
+    summary["machine"] = presets["machine"][0]
+    summary["filament"] = presets["filament"][0]
+    summary["size_bytes"] = out.stat().st_size
+    summary["support"] = support
+
+    # Model-side adhesion gate: tiny plate contact means the print peels off no
+    # matter how healthy the printer is. Two complementary signals:
+    #  - geometry: the STL's own base area (a brim can't fix point contact),
+    #  - G-code: actual first-layer extrusion (catches slicer reorientation).
+    base_area = stl_base_contact_mm2(stl)
+    if base_area is not None:
+        summary["base_contact_mm2"] = base_area
+    if gcode:
+        try:
+            lh = float(summary.get("layer_height") or 0.2)
+        except ValueError:
+            lh = 0.2
+        area = first_layer_area_mm2(gcode, lh)
+        if area is not None:
+            summary["first_layer_mm2"] = area
+    if ((base_area is not None and base_area < BASE_CONTACT_MIN_MM2)
+            or (summary.get("first_layer_mm2") is not None
+                and summary["first_layer_mm2"] < FIRST_LAYER_MIN_MM2)):
+        summary["adhesion_warning"] = True
+
+    # Support gate: how much of the job prints OVER AIR (nothing under it, not
+    # even support)? Catches both "supports off" and auto-support skipping
+    # small overhangs (support_remove_small_overhang, fatal for voxel models).
+    if gcode:
+        oa = over_air_report(gcode)
+        if oa:
+            summary["over_air_mm2"] = oa["over_air_mm2"]
+            summary["over_air_worst_layers"] = oa["worst_layers"]
+            if oa["over_air_mm2"] > OVER_AIR_WARN_MM2:
+                summary["support_warning"] = True
+    return summary
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("stl", help="path to the STL to slice")
@@ -285,110 +397,25 @@ def main() -> int:
     plate = int(cfg.get("slice", {}).get("plate", 1))
     out = Path(args.output).expanduser().resolve() if args.output else \
         stl.with_suffix("").with_suffix(".gcode.3mf")
-    if out.exists():
-        out.unlink()
 
-    # Optional build-plate type → sets the bed temperature (Fix: Cool Plate 35C
-    # was the default and too cold for PLA on textured PEI). Cloned into the
-    # process preset because the CLI rejects a second process file.
     bed_type_raw = args.bed_type or cfg.get("slice", {}).get("bed_type")
-    bed_type = None
-    proc_override = None
-    proc_extra: dict = {}
-    if bed_type_raw:
-        bed_type = BED_TYPES.get(bed_type_raw.strip().lower(), bed_type_raw.strip())
-        proc_extra["curr_bed_type"] = bed_type
-    if args.support:
-        proc_extra["enable_support"] = "1"
-        proc_extra["support_type"] = "tree(auto)"
-        # Bambu's default skips SMALL overhang patches — fatal for voxel/stepped
-        # models whose overhangs are all small (learned from a drooped print).
-        proc_extra["support_remove_small_overhang"] = "0"
-    if proc_extra:
-        proc_override = make_process_override(presets["process"][1], proc_extra)
 
-    cmd = build_command(slicer_path, presets, stl, out, plate, proc_override)
-    eprint(f"Slicing {stl.name} with {kind}:")
-    for k in ("machine", "process", "filament"):
-        eprint(f"  {k}: {presets[k][0]}")
-    if bed_type:
-        eprint(f"  bed_type: {bed_type}")
-    if args.support:
-        eprint("  supports : tree(auto)")
-    eprint(f"  -> {out}")
-
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True,
-                              timeout=SLICE_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        eprint(f"✗ Slicer timed out after {SLICE_TIMEOUT}s")
-        return 1
-    finally:
-        if proc_override is not None:
-            try:
-                proc_override.unlink()
-            except OSError:
-                pass
-
-    if not out.is_file():
-        eprint("✗ Slice failed — no output produced.")
-        eprint("--- slicer stdout (tail) ---")
-        eprint("\n".join(proc.stdout.splitlines()[-25:]))
-        eprint("--- slicer stderr (tail) ---")
-        eprint("\n".join(proc.stderr.splitlines()[-25:]))
+    summary = slice_and_analyze(slicer_path, kind, presets, stl, out, plate,
+                                bed_type_raw, support=args.support)
+    if summary is None:
         return 1
 
-    gcode = _gcode_text(out, plate)
-    summary = parse_summary(gcode) if gcode else {}
-
-    # Bambu's CLI leaves weight at 0.00; estimate from length when needed.
-    weight = summary.get("filament_g")
-    try:
-        weight_bad = weight is None or float(weight) == 0.0
-    except ValueError:
-        weight_bad = True
-    if weight_bad and summary.get("filament_mm"):
-        est = estimate_weight_g(slicer_path, presets["filament"][1],
-                                float(summary["filament_mm"]))
-        if est is not None:
-            summary["filament_g"] = f"{est}"
-            summary["filament_g_estimated"] = True
-
-    summary["output"] = str(out)
-    summary["machine"] = presets["machine"][0]
-    summary["filament"] = presets["filament"][0]
-    summary["size_bytes"] = out.stat().st_size
-
-    # Model-side adhesion gate: tiny plate contact means the print peels off no
-    # matter how healthy the printer is. Two complementary signals:
-    #  - geometry: the STL's own base area (a brim can't fix point contact),
-    #  - G-code: actual first-layer extrusion (catches slicer reorientation).
-    base_area = stl_base_contact_mm2(stl)
-    if base_area is not None:
-        summary["base_contact_mm2"] = base_area
-    if gcode:
-        try:
-            lh = float(summary.get("layer_height") or 0.2)
-        except ValueError:
-            lh = 0.2
-        area = first_layer_area_mm2(gcode, lh)
-        if area is not None:
-            summary["first_layer_mm2"] = area
-    if ((base_area is not None and base_area < BASE_CONTACT_MIN_MM2)
-            or (summary.get("first_layer_mm2") is not None
-                and summary["first_layer_mm2"] < FIRST_LAYER_MIN_MM2)):
-        summary["adhesion_warning"] = True
-
-    # Support gate: how much of the job prints OVER AIR (nothing under it, not
-    # even support)? Catches both "supports off" and auto-support skipping
-    # small overhangs (support_remove_small_overhang, fatal for voxel models).
-    if gcode:
-        oa = over_air_report(gcode)
-        if oa:
-            summary["over_air_mm2"] = oa["over_air_mm2"]
-            summary["over_air_worst_layers"] = oa["worst_layers"]
-            if oa["over_air_mm2"] > OVER_AIR_WARN_MM2:
-                summary["support_warning"] = True
+    # Supports are a DERIVED parameter, not a tuned one: when the over-air
+    # gate flags the sliced job, re-slice with supports automatically.
+    if summary.get("support_warning") and not args.support:
+        eprint(f"⚠ {summary['over_air_mm2']} mm2 prints over air — "
+               "re-slicing with tree supports ...")
+        resliced = slice_and_analyze(slicer_path, kind, presets, stl, out,
+                                     plate, bed_type_raw, support=True)
+        if resliced is not None:
+            resliced["auto_support_applied"] = True
+            resliced["over_air_before_supports"] = summary["over_air_mm2"]
+            summary = resliced
 
     eprint("✓ Slice complete:")
     eprint(f"  print time : {summary.get('print_time')}")
@@ -410,11 +437,14 @@ def main() -> int:
         worst_s = ", ".join(f"z{w['z']}: {w['mm2']}mm2" for w in worst[:3])
         eprint(f"  over-air   : {summary['over_air_mm2']} mm2 printed over "
                f"nothing{' (worst: ' + worst_s + ')' if worst_s else ''}")
+    if summary.get("auto_support_applied"):
+        eprint(f"  supports   : auto-enabled (over-air was "
+               f"{summary['over_air_before_supports']} mm2 without)")
     if summary.get("support_warning"):
-        eprint(f"  ⚠ over {OVER_AIR_WARN_MM2:.0f} mm2 prints over air — parts "
-               "will droop. Re-slice with --support; if supports were already "
-               "on, small overhangs were skipped (--support now disables "
-               "support_remove_small_overhang).")
+        eprint(f"  ⚠ over {OVER_AIR_WARN_MM2:.0f} mm2 still prints over air "
+               "WITH tree supports — inspect over_air_worst_layers; heights "
+               "with large patches will droop (short spans anchored both "
+               "sides are bridges and usually fine).")
     eprint(f"  output     : {out} ({summary['size_bytes']} bytes)")
 
     print(json.dumps(summary, indent=2))

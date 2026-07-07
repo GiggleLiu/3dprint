@@ -235,6 +235,25 @@ def build_print_plan(meta: dict, sources: dict, use_ams: bool, ams_tray: int,
     blocks, warns = [], []
     fil = (meta.get("filament_type") or "").strip()
 
+    if use_ams and ams_tray is None:
+        # The tray (= color) is a PER-PRINT decision, not a config default:
+        # show the live slots and make the human pick one for THIS print.
+        loaded = [t for t in sources["trays"] if not t["empty"]]
+        slots = ", ".join(f"{t['slot']}: {t['type']} #{t['color'][:6]}"
+                          for t in loaded) or "none loaded"
+        blocks.append(f"no AMS slot chosen for this print — ask the user which "
+                      f"color to use ({slots}) and pass --ams-tray N.")
+        return {
+            "source": "AMS — slot not chosen yet",
+            "filament": fil or "?",
+            "bed": f"{meta.get('bed_temp')}°C on "
+                   f"{meta.get('bed_type') or '(default plate)'}",
+            "nozzle": f"{meta.get('nozzle_temp') or '?'}°C",
+            "blocks": blocks,
+            "warnings": warns,
+            "ok": False,
+        }
+
     if use_ams:
         tray = next((t for t in sources["trays"] if t["slot"] == ams_tray), None)
         if not sources["ams_present"]:
@@ -434,8 +453,14 @@ def main() -> int:
     print_cfg = cfg.get("print", {}) or {}
     plate = int(cfg.get("slice", {}).get("plate", 1))
     use_ams = bool(print_cfg.get("use_ams", False))
-    ams_tray = args.ams_tray if args.ams_tray is not None else \
-        int(print_cfg.get("ams_tray", 0))
+    # The tray (color) is a per-print decision: it must be passed explicitly
+    # with --ams-tray for every print. A [print].ams_tray in the config is
+    # shown as a suggestion in the refusal message but never auto-applied.
+    ams_tray = args.ams_tray
+    if use_ams and ams_tray is None and print_cfg.get("ams_tray") is not None:
+        eprint(f"• config suggests ams_tray={print_cfg['ams_tray']}, but the "
+               "tray is chosen per print — confirm the color with the user "
+               "and pass --ams-tray explicitly.")
     remote_name = args.remote_name or threemf.name
 
     printer = connect(cfg)

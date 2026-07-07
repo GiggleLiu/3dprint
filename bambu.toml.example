@@ -37,8 +37,10 @@ plate    = 1
 # MUST be true, or the printer feeds from the (empty) external path and extrudes
 # nothing. Set false only for a directly-fed external spool.
 use_ams = true
-# Which AMS slot (0-3) to print from when use_ams is true.
-ams_tray = 0
+# NOTE: the AMS slot (= color) is chosen PER PRINT, not here — send.py requires
+# an explicit --ams-tray N each print. An optional value below is only shown as
+# a suggestion in send.py's refusal message, never auto-applied.
+# ams_tray = 0
 
 [design]
 # Used by the design-stl skill. All optional (these are the defaults).
