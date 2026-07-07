@@ -23,6 +23,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _config import eprint, find_slicer, load_config, preset_json_path  # noqa: E402
+from _gcode_check import over_air_report  # noqa: E402
+
+# Above this much total extrusion-over-air the job will visibly droop; the two
+# flat calibration prints scored 6-16 mm2, the under-supported voxel horse 399.
+OVER_AIR_WARN_MM2 = 60.0
 
 SLICE_TIMEOUT = 900  # seconds
 
@@ -296,6 +301,9 @@ def main() -> int:
     if args.support:
         proc_extra["enable_support"] = "1"
         proc_extra["support_type"] = "tree(auto)"
+        # Bambu's default skips SMALL overhang patches — fatal for voxel/stepped
+        # models whose overhangs are all small (learned from a drooped print).
+        proc_extra["support_remove_small_overhang"] = "0"
     if proc_extra:
         proc_override = make_process_override(presets["process"][1], proc_extra)
 
@@ -371,6 +379,17 @@ def main() -> int:
                 and summary["first_layer_mm2"] < FIRST_LAYER_MIN_MM2)):
         summary["adhesion_warning"] = True
 
+    # Support gate: how much of the job prints OVER AIR (nothing under it, not
+    # even support)? Catches both "supports off" and auto-support skipping
+    # small overhangs (support_remove_small_overhang, fatal for voxel models).
+    if gcode:
+        oa = over_air_report(gcode)
+        if oa:
+            summary["over_air_mm2"] = oa["over_air_mm2"]
+            summary["over_air_worst_layers"] = oa["worst_layers"]
+            if oa["over_air_mm2"] > OVER_AIR_WARN_MM2:
+                summary["support_warning"] = True
+
     eprint("✓ Slice complete:")
     eprint(f"  print time : {summary.get('print_time')}")
     eprint(f"  filament   : {summary.get('filament_g')} g "
@@ -386,6 +405,16 @@ def main() -> int:
         eprint("  ⚠ plate contact is tiny — the part will likely detach "
                "mid-print. Give the model a flat base (cut its underside), "
                "don't rely on a brim to hold point contact.")
+    if summary.get("over_air_mm2") is not None:
+        worst = summary.get("over_air_worst_layers") or []
+        worst_s = ", ".join(f"z{w['z']}: {w['mm2']}mm2" for w in worst[:3])
+        eprint(f"  over-air   : {summary['over_air_mm2']} mm2 printed over "
+               f"nothing{' (worst: ' + worst_s + ')' if worst_s else ''}")
+    if summary.get("support_warning"):
+        eprint(f"  ⚠ over {OVER_AIR_WARN_MM2:.0f} mm2 prints over air — parts "
+               "will droop. Re-slice with --support; if supports were already "
+               "on, small overhangs were skipped (--support now disables "
+               "support_remove_small_overhang).")
     eprint(f"  output     : {out} ({summary['size_bytes']} bytes)")
 
     print(json.dumps(summary, indent=2))
