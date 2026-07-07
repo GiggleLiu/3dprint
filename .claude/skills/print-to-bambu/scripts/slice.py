@@ -71,17 +71,17 @@ BED_TYPES = {
 }
 
 
-def make_bed_type_process(process_json: Path, bed_type: str) -> Path:
-    """Copy a process preset with curr_bed_type injected, as a single temp file.
+def make_process_override(process_json: Path, overrides: dict) -> Path:
+    """Copy a process preset with extra keys injected, as a single temp file.
 
     The CLI rejects a second process file in --load-settings ("duplicate process
-    config"), so we can't add the bed type as an overlay — we clone the process
-    and set curr_bed_type on the clone. inherits still resolves against the
-    system profiles. Returns a temp path the caller must unlink.
+    config"), so we can't add options as an overlay — we clone the process and
+    set them on the clone. inherits still resolves against the system profiles.
+    Returns a temp path the caller must unlink.
     """
     data = json.loads(process_json.read_text())
-    data["curr_bed_type"] = bed_type
-    fd, tmp = tempfile.mkstemp(prefix="proc_bedtype_", suffix=".json")
+    data.update(overrides)
+    fd, tmp = tempfile.mkstemp(prefix="proc_override_", suffix=".json")
     with os.fdopen(fd, "w") as fh:
         json.dump(data, fh)
     return Path(tmp)
@@ -252,6 +252,9 @@ def main() -> int:
     ap.add_argument("--filament", help="override [slice].filament preset name")
     ap.add_argument("--bed-type", help="build-plate type, e.g. \"Textured PEI Plate\" "
                     "(sets the bed temp); overrides [slice].bed_type")
+    ap.add_argument("--support", action="store_true",
+                    help="enable tree supports (for models with overhangs, "
+                    "e.g. figurines)")
     args = ap.parse_args()
 
     stl = Path(args.stl).expanduser().resolve()
@@ -286,9 +289,15 @@ def main() -> int:
     bed_type_raw = args.bed_type or cfg.get("slice", {}).get("bed_type")
     bed_type = None
     proc_override = None
+    proc_extra: dict = {}
     if bed_type_raw:
         bed_type = BED_TYPES.get(bed_type_raw.strip().lower(), bed_type_raw.strip())
-        proc_override = make_bed_type_process(presets["process"][1], bed_type)
+        proc_extra["curr_bed_type"] = bed_type
+    if args.support:
+        proc_extra["enable_support"] = "1"
+        proc_extra["support_type"] = "tree(auto)"
+    if proc_extra:
+        proc_override = make_process_override(presets["process"][1], proc_extra)
 
     cmd = build_command(slicer_path, presets, stl, out, plate, proc_override)
     eprint(f"Slicing {stl.name} with {kind}:")
@@ -296,6 +305,8 @@ def main() -> int:
         eprint(f"  {k}: {presets[k][0]}")
     if bed_type:
         eprint(f"  bed_type: {bed_type}")
+    if args.support:
+        eprint("  supports : tree(auto)")
     eprint(f"  -> {out}")
 
     try:

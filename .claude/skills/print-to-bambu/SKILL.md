@@ -162,6 +162,16 @@ compatible presets), then save it as `bambu.<name>.toml` and fill in ip/serial/c
   plate display ID. For a one-filament X2D file whose sequence is `[1]` and the
   desired AMS tray is `3`, send `ams_mapping: [-1, 3]` and
   `ams_mapping2: [{ams_id:255, slot_id:255}, {ams_id:0, slot_id:3}]`.
+- **Print "succeeds" (FINISH, no errors) but the plate is empty** → the X2D's
+  end-of-print sequence cuts and retracts the filament while leaving BOTH
+  `ams.tray_now` and `device.extruder.info[*].snow` stale at "loaded". The next
+  job's gate then trusts them, skips the preload, and the whole job runs with
+  nothing behind a few cm of stub — zero errors, temps and motion all normal.
+  `send.py` therefore refresh-loads the AMS slot before EVERY print (a load on
+  a loaded slot is a quick cut/re-feed/purge). Never trust a "loaded" state
+  that crossed a job boundary. Related: `ams_change_filament` is also silently
+  dropped in busy windows (e.g. right after an unload) with `errno 0` never
+  arriving — `load_ams_tray` resends until the firmware visibly acts.
 - **X2D/H2 "started" but the printer never prints** → a successful MQTT publish
   proves nothing: this firmware takes ~30–40 s to act on `project_file`, and it
   *silently drops* a start sent while the filament-change flow is still busy

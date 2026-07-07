@@ -499,14 +499,18 @@ def main() -> int:
         if args.dry_run:
             eprint("• --dry-run: NOT starting the print.")
         else:
-            # Pre-load the AMS slot to the nozzle. A print with use_ams alone does
-            # NOT reliably trigger the load (printer prints dry, tray_now=255), so
-            # we load it explicitly and confirm before starting.
-            if use_ams and sources.get("tray_now") != ams_tray:
+            # Pre-load the AMS slot to the nozzle — ALWAYS, even when the state
+            # says it is already loaded. A print with use_ams alone does NOT
+            # trigger the load (prints dry, tray_now=255), and the X2D's
+            # end-of-print cut+retract can leave tray_now/snow stale at
+            # "loaded", which once cost a full job printed with no filament.
+            # A refresh load on a genuinely loaded slot is a quick
+            # cut/re-feed/purge; the wasted minute is cheap insurance.
+            if use_ams:
                 noz = int(meta.get("nozzle_temp") or 220)
-                eprint(f"Loading AMS slot {ams_tray} to the nozzle (this heats + "
-                       "feeds; ~1-2 min) ...")
-                if load_ams_tray(printer, ams_tray, temp=noz):
+                eprint(f"Loading AMS slot {ams_tray} to the nozzle (refresh "
+                       "load: heats + feeds + purges; ~1-2 min) ...")
+                if load_ams_tray(printer, ams_tray, temp=noz, refresh=True):
                     eprint(f"✓ AMS slot {ams_tray} loaded (filament at nozzle).")
                     result["preloaded"] = True
                     # The firmware keeps its filament-change flow busy for a
