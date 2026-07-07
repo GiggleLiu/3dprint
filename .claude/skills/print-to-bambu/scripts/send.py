@@ -32,7 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _config import eprint, load_config  # noqa: E402
 from _printer import (  # noqa: E402
     connect, disconnect, load_ams_tray, read_sources, read_status,
-    start_project_file)
+    start_project_file, wait_filament_change_done, wait_print_started)
 
 
 def read_plate_meta(threemf: Path, plate: int) -> dict:
@@ -509,6 +509,12 @@ def main() -> int:
                 if load_ams_tray(printer, ams_tray, temp=noz):
                     eprint(f"✓ AMS slot {ams_tray} loaded (filament at nozzle).")
                     result["preloaded"] = True
+                    # The firmware keeps its filament-change flow busy for a
+                    # while after the tray reaches the nozzle; a start sent in
+                    # that window is silently dropped (X2D/H2). Wait it out.
+                    if not wait_filament_change_done(printer):
+                        eprint("⚠ filament-change flow still busy after 90s — "
+                               "the start command may be ignored.")
                 elif not args.force:
                     eprint(f"✗ Not starting: AMS slot {ams_tray} did not load "
                            "(filament not feeding — check the spool is threaded "
@@ -532,13 +538,30 @@ def main() -> int:
                                          ams_mapping=ams_mapping)
                 result["start_mode"] = "bambulabs_api"
                 result["ams_mapping"] = ams_mapping
-            result["started"] = bool(ok)
             result["source"] = plan["source"]
-            if ok:
-                eprint("✓ Print started.")
-            else:
+            if not ok:
+                result["started"] = False
                 eprint("✗ Printer rejected start_print (Developer Mode off? "
                        "see reference/developer-mode.md).")
+            else:
+                # A successful publish proves nothing: X2D/H2 firmware takes
+                # ~30-40s to act on project_file and silently drops it in some
+                # states. Only a gcode_state transition counts as started.
+                eprint("Start command sent — waiting for the printer to act "
+                       "(can take ~40s on X2D/H2) ...")
+                started_state = wait_print_started(printer)
+                result["started"] = started_state in ("RUNNING", "PREPARE")
+                result["observed_state"] = started_state
+                if result["started"]:
+                    eprint(f"✓ Print started (printer is {started_state}).")
+                elif started_state == "FAILED":
+                    eprint("✗ Print FAILED right after start — check the "
+                           "printer screen / HMS errors.")
+                else:
+                    eprint("✗ Printer never transitioned to RUNNING within "
+                           "120s — the firmware silently dropped the start "
+                           "command (busy filament change? stale job?). "
+                           "Rerun send.py to retry.")
             result["status"] = read_status(printer)
     finally:
         disconnect(printer)
