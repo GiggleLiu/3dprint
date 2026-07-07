@@ -205,27 +205,107 @@ def _tray_now(printer):
     return ((d.get("print", {}) or {}).get("ams", {}) or {}).get("tray_now")
 
 
+def _tray_loaded(printer, tray: int) -> bool:
+    """True when the tray is at a nozzle, per legacy OR dual-nozzle fields.
+
+    Single-nozzle firmware reports ams.tray_now. Dual-nozzle (X2D/H2) firmware
+    also packs the loaded slot into device.extruder.info[*].snow as
+    (ams_id << 8) | slot_id; 0xFFFF / 0xFEFF mean nothing loaded (255/254 are
+    the external-spool virtual trays, slot 0xFF is none).
+    """
+    if str(_tray_now(printer)) == str(int(tray)):
+        return True
+    ams_id, slot_id = divmod(int(tray), 4)
+    packed = (ams_id << 8) | slot_id
+    d = _safe(printer.mqtt_dump) or {}
+    infos = ((((d.get("print", {}) or {}).get("device") or {})
+              .get("extruder") or {}).get("info") or [])
+    return any(item.get("snow") == packed for item in infos)
+
+
 def load_ams_tray(printer, tray: int, temp: int = 220, timeout: float = 150.0) -> bool:
     """Load a specific AMS slot to the nozzle and wait until it's actually there.
 
     bambulabs-api's load_filament_spool() hardcodes target=255 (external spool),
-    so we send ams_change_filament with the real tray index. A print started with
-    use_ams + ams_mapping does NOT reliably trigger this load on its own (the
-    printer leaves tray_now=255 and prints dry), so we pre-load explicitly and
-    confirm tray_now == tray before printing. Returns True once loaded.
+    so we publish ams_change_filament ourselves. Dual-nozzle (X2D/H2) firmware
+    SILENTLY IGNORES the legacy target-only form — it requires the explicit
+    ams_id + slot_id fields Bambu Studio sends — so we always send the full
+    Studio-style payload (old firmware ignores the extra keys and uses target).
+    A print started with use_ams + ams_mapping does NOT reliably trigger this
+    load on its own (the printer leaves tray_now=255 and prints dry), so we
+    pre-load explicitly and confirm the tray is at a nozzle before printing.
+    Returns True once loaded.
     """
     import time as _t
-    if str(_tray_now(printer)) == str(int(tray)):
+    if _tray_loaded(printer, tray):
         return True  # already loaded
+    ams_id, slot_id = divmod(int(tray), 4)
     _publish(printer, {"print": {"command": "ams_change_filament",
+                                 "ams_id": ams_id, "slot_id": slot_id,
                                  "target": int(tray),
                                  "curr_temp": int(temp), "tar_temp": int(temp)}})
     deadline = _t.time() + timeout
     while _t.time() < deadline:
-        if str(_tray_now(printer)) == str(int(tray)):
+        if _tray_loaded(printer, tray):
             return True
         _t.sleep(3)
     return False
+
+
+def filament_change_busy(printer) -> bool:
+    """True while the firmware's filament-change flow is still active.
+
+    device.extruder.state bit 19 is the busy-loading flag (Bambu Studio's
+    ExtderSystemParser). A print start published while it is set is SILENTLY
+    dropped by X2D/H2 firmware — no error reply, no state change.
+    """
+    d = _safe(printer.mqtt_dump) or {}
+    st = (((d.get("print", {}) or {}).get("device") or {})
+          .get("extruder") or {}).get("state")
+    try:
+        return bool((int(st) >> 19) & 1)
+    except (TypeError, ValueError):
+        return False
+
+
+def wait_filament_change_done(printer, timeout: float = 90.0) -> bool:
+    """Wait for the filament-change flow to finish after a load. True if idle."""
+    import time as _t
+    deadline = _t.time() + timeout
+    while _t.time() < deadline:
+        if not filament_change_busy(printer):
+            return True
+        _t.sleep(2)
+    return not filament_change_busy(printer)
+
+
+def wait_print_started(printer, timeout: float = 120.0) -> str | None:
+    """Wait for the firmware to actually act on a start command.
+
+    X2D/H2 firmware takes ~30-40 s to process project_file and silently drops
+    it in some states, so a successful MQTT publish means nothing. Returns the
+    observed state: "RUNNING"/"PREPARE" on success, "FAILED" if the job errored
+    immediately, None if nothing happened within the timeout (treat as NOT
+    started).
+    """
+    import time as _t
+
+    def _gs():
+        d = _safe(printer.mqtt_dump) or {}
+        return ((d.get("print", {}) or {}).get("gcode_state") or "").upper()
+
+    # The previous job's terminal state (FINISH/FAILED) lingers until the new
+    # job takes over — only a state that CHANGED counts as this job's outcome.
+    stale = _gs()
+    deadline = _t.time() + timeout
+    while _t.time() < deadline:
+        gs = _gs()
+        if gs in {"RUNNING", "PREPARE"}:
+            return gs
+        if gs == "FAILED" and gs != stale:
+            return gs
+        _t.sleep(3)
+    return None
 
 
 def start_project_file(printer, payload: dict) -> bool:

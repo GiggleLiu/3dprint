@@ -131,6 +131,82 @@ def parse_summary(gcode: str) -> dict:
     }
 
 
+# Filament cross-section (1.75mm) in mm^3 per mm of filament.
+_FILAMENT_MM3_PER_MM = math.pi * (1.75 / 2.0) ** 2
+# Below this first-layer footprint the part is very likely to detach mid-print
+# (the hydrogen-molecule lesson: full spheres touch the plate in a point).
+FIRST_LAYER_MIN_MM2 = 40.0
+# Minimum area of the MODEL's own base (triangles at min z). A brim can make
+# the first-layer extrusion look healthy while the model still only touches
+# the plate in points/edges — the brim then holds a 2mm-wide neck.
+BASE_CONTACT_MIN_MM2 = 30.0
+
+
+def stl_base_contact_mm2(stl_path: Path, tol: float = 0.25) -> float | None:
+    """XY-projected area of the mesh's plate-contact triangles (binary STL).
+
+    Sums triangles that lie entirely within `tol` mm of the model's lowest
+    point. A sphere resting on the plate scores ~0 even though it slices fine —
+    this is the geometry-side adhesion gate. Best effort: returns None for
+    ASCII STLs or parse failures. Note the slicer may auto-reorient the model
+    (--orient), so pair this with the G-code first-layer check.
+    """
+    import struct
+    try:
+        data = stl_path.read_bytes()
+        if data[:5] == b"solid" and b"facet" in data[:500]:
+            return None  # ASCII STL; skip rather than half-parse
+        (n,) = struct.unpack_from("<I", data, 80)
+        if len(data) < 84 + n * 50:
+            return None
+        zmin = None
+        tris = []
+        off = 84
+        for _ in range(n):
+            v = struct.unpack_from("<12f", data, off)  # normal + 3 vertices
+            off += 50
+            tri = ((v[3], v[4], v[5]), (v[6], v[7], v[8]), (v[9], v[10], v[11]))
+            tris.append(tri)
+            lo = min(tri[0][2], tri[1][2], tri[2][2])
+            zmin = lo if zmin is None else min(zmin, lo)
+        if zmin is None:
+            return None
+        area = 0.0
+        for a, b, c in tris:
+            if max(a[2], b[2], c[2]) <= zmin + tol:
+                area += 0.5 * abs((b[0] - a[0]) * (c[1] - a[1])
+                                  - (c[0] - a[0]) * (b[1] - a[1]))
+        return round(area, 1)
+    except (OSError, struct.error):
+        return None
+
+
+def first_layer_area_mm2(gcode: str, layer_height: float) -> float | None:
+    """Approximate the printed first-layer footprint from the G-code.
+
+    Sums extruded filament between the first two layer markers (Bambu:
+    "; CHANGE_LAYER", Orca: ";LAYER_CHANGE") and converts volume / height to
+    area. This is a *model* printability gate: a mesh that meets the plate in
+    points or thin edges slices fine, uploads fine, and then peels off.
+    """
+    for marker in ("; CHANGE_LAYER", ";LAYER_CHANGE"):
+        parts = gcode.split(marker)
+        if len(parts) >= 3:
+            first_layer = parts[1]
+            break
+    else:
+        return None
+    e_total = 0.0
+    for m in re.finditer(r"^G[123][^\n;]*\sE([\d.]+)", first_layer, re.MULTILINE):
+        try:
+            e_total += float(m.group(1))
+        except ValueError:
+            pass
+    if layer_height <= 0:
+        return None
+    return round(e_total * _FILAMENT_MM3_PER_MM / layer_height, 1)
+
+
 def _filament_prop(slicer: Path, json_path: Path, key: str, depth: int = 0):
     """Resolve a filament preset value, following the `inherits` chain.
 
@@ -264,6 +340,26 @@ def main() -> int:
     summary["filament"] = presets["filament"][0]
     summary["size_bytes"] = out.stat().st_size
 
+    # Model-side adhesion gate: tiny plate contact means the print peels off no
+    # matter how healthy the printer is. Two complementary signals:
+    #  - geometry: the STL's own base area (a brim can't fix point contact),
+    #  - G-code: actual first-layer extrusion (catches slicer reorientation).
+    base_area = stl_base_contact_mm2(stl)
+    if base_area is not None:
+        summary["base_contact_mm2"] = base_area
+    if gcode:
+        try:
+            lh = float(summary.get("layer_height") or 0.2)
+        except ValueError:
+            lh = 0.2
+        area = first_layer_area_mm2(gcode, lh)
+        if area is not None:
+            summary["first_layer_mm2"] = area
+    if ((base_area is not None and base_area < BASE_CONTACT_MIN_MM2)
+            or (summary.get("first_layer_mm2") is not None
+                and summary["first_layer_mm2"] < FIRST_LAYER_MIN_MM2)):
+        summary["adhesion_warning"] = True
+
     eprint("✓ Slice complete:")
     eprint(f"  print time : {summary.get('print_time')}")
     eprint(f"  filament   : {summary.get('filament_g')} g "
@@ -271,6 +367,14 @@ def main() -> int:
     eprint(f"  temps      : nozzle {summary.get('nozzle_temp')}C / "
            f"bed {summary.get('bed_temp')}C"
            f"{' on ' + summary['bed_type'] if summary.get('bed_type') else ''}")
+    if summary.get("base_contact_mm2") is not None or \
+            summary.get("first_layer_mm2") is not None:
+        eprint(f"  adhesion   : model base {summary.get('base_contact_mm2', '?')} mm2, "
+               f"first layer ~{summary.get('first_layer_mm2', '?')} mm2")
+    if summary.get("adhesion_warning"):
+        eprint("  ⚠ plate contact is tiny — the part will likely detach "
+               "mid-print. Give the model a flat base (cut its underside), "
+               "don't rely on a brim to hold point contact.")
     eprint(f"  output     : {out} ({summary['size_bytes']} bytes)")
 
     print(json.dumps(summary, indent=2))

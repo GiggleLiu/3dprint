@@ -162,6 +162,30 @@ compatible presets), then save it as `bambu.<name>.toml` and fill in ip/serial/c
   plate display ID. For a one-filament X2D file whose sequence is `[1]` and the
   desired AMS tray is `3`, send `ams_mapping: [-1, 3]` and
   `ams_mapping2: [{ams_id:255, slot_id:255}, {ams_id:0, slot_id:3}]`.
+- **X2D/H2 "started" but the printer never prints** → a successful MQTT publish
+  proves nothing: this firmware takes ~30–40 s to act on `project_file`, and it
+  *silently drops* a start sent while the filament-change flow is still busy
+  (`device.extruder.state` bit 19 set right after a load) — no error reply, no
+  state change, nozzle just cools back down. `send.py` now waits out the busy
+  flag after preloading and only reports "started" after seeing the
+  RUNNING/PREPARE transition. If it reports the printer never transitioned,
+  simply rerun it — do not trust a bare publish.
+- **Print sticks then peels off / "filament not attached"** → the *model*, not
+  the printer: a mesh that meets the plate in points or thin edges (e.g. full
+  spheres) slices and uploads fine but cannot adhere; a brim only grips a tiny
+  neck. `slice.py` measures this (`base_contact_mm2` from the STL geometry +
+  `first_layer_mm2` from the G-code) and warns. Fix the geometry — cut the
+  underside flat — rather than forcing it with adhesion tricks.
+- **X2D/H2 silently ignores `ams_change_filament` with only `target`** → no
+  error, no AMS motion, `tray_tar` stays 255, and the preload gate reports "slot
+  did not load" even though the spool is fine. Dual-nozzle firmware requires the
+  Bambu-Studio-style payload with explicit `ams_id` and `slot_id` (keep legacy
+  `target` for older printers). Success shows within seconds as `tray_tar`, then
+  `tray_now` and `device.extruder.info[*].snow == (ams_id<<8)|slot_id`; `snow`
+  values 0xFFFF/0xFEFF mean "nothing loaded" (254/255 are the per-nozzle
+  external-spool virtual trays), not real slots. `load_ams_tray` in
+  `scripts/_printer.py` sends the full payload and checks both fields — don't
+  hand-roll the command.
 
 ## Safety / distribution
 

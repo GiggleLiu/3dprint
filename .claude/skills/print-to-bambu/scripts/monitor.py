@@ -60,6 +60,8 @@ def main() -> int:
     cfg = load_config(args.config, printer=args.printer)
     printer = connect(cfg)
     seen_running = False
+    stale_terminal = None   # terminal state already present at startup (old job)
+    first_meaningful = True
     start = time.time()
     rc = 0
     try:
@@ -71,6 +73,25 @@ def main() -> int:
                 seen_running = True
             if args.once:
                 break
+            # A terminal state that is already there on the FIRST meaningful read
+            # belongs to the PREVIOUS job (send.py starts a print while the printer
+            # still reports the old FINISH). Don't declare victory on it — wait for
+            # the state to change, then resume normal termination logic.
+            if first_meaningful and state and state != "UNKNOWN":
+                first_meaningful = False
+                if state in TERMINAL:
+                    stale_terminal = state
+                    eprint(f"• Printer still reports {state} from a previous job — "
+                           "waiting for the new job to start (use --once for a "
+                           "snapshot).")
+            if stale_terminal:
+                if state == stale_terminal:
+                    if args.timeout_min and (time.time() - start) > args.timeout_min * 60:
+                        eprint(f"• Monitor timed out after {args.timeout_min} min.")
+                        break
+                    time.sleep(args.interval)
+                    continue
+                stale_terminal = None
             if state == "FINISH":
                 eprint("✓ Print finished.")
                 break
