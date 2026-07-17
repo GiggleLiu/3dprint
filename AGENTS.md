@@ -12,6 +12,9 @@ Bambu Lab printer over the local network:
 
 - **`design-stl`** — turn a natural-language description into a *printable* STL via
   a generate→verify loop (default engine: Python + trimesh; OpenSCAD optional).
+- **`preview-stl`** — present STLs as one self-contained HTML WebGL viewer page
+  (multi-part scenes, exploded/ghost/negative-space views) and physics-simulate a
+  ball rolling through the printed geometry, animated in the viewer.
 - **`print-to-bambu`** — slice an STL and print it over LAN, behind safety gates.
 - **`onboard`** — one-time setup (slicer, venv, config, Developer/LAN Mode).
 
@@ -55,7 +58,7 @@ open and follow the file directly.)
 ## Layout
 
 ```
-.claude/skills/        # the skills (design-stl, print-to-bambu, onboard) + SKILL.md each
+.claude/skills/        # the skills (design-stl, preview-stl, print-to-bambu, onboard) + SKILL.md each
 docs/superpowers/specs/ # design notes for the skills
 examples/              # curated, tracked example builders + assets (hydrogen_molecule.py, model.py)
 local/                 # gitignored scratch: generated STLs & build artifacts
