@@ -9,8 +9,9 @@ translucent parts, optional animated ball following a physics trajectory
 from simulate_ball.py). Nothing is fetched at view time — the file works
 offline and can be shared as-is.
 
-Two input modes:
+Input modes:
   build_viewer.py --out viewer.html a.stl b.stl        # one scene per file
+  build_viewer.py --demo --out viewer.html a.stl b.stl # assembly + exploded
   build_viewer.py --out viewer.html manifest.json      # full control
 
 Manifest (paths relative to the manifest file):
@@ -49,6 +50,14 @@ def pack(mesh: trimesh.Trimesh) -> str:
     return base64.b64encode(gzip.compress(raw, 6)).decode()
 
 
+def packed_part(mesh: trimesh.Trimesh, name: str, color: str,
+                alpha: float | None = None) -> dict:
+    out = {"name": name, "color": color, "stl": pack(mesh)}
+    if alpha is not None:
+        out["alpha"] = alpha
+    return out
+
+
 def load_part(spec: dict, base: Path) -> dict:
     m = trimesh.load(base / spec["stl"])
     rot = spec.get("rotate")
@@ -57,16 +66,70 @@ def load_part(spec: dict, base: Path) -> dict:
             np.radians(rot["deg"]), rot["axis"]))
     if spec.get("translate"):
         m.apply_translation(spec["translate"])
-    out = {"name": spec.get("name", Path(spec["stl"]).stem),
-           "color": spec.get("color", PALETTE[0]), "stl": pack(m)}
-    if spec.get("alpha") is not None:
-        out["alpha"] = spec["alpha"]
-    return out
+    return packed_part(
+        m,
+        spec.get("name", Path(spec["stl"]).stem),
+        spec.get("color", PALETTE[0]),
+        spec.get("alpha"),
+    )
+
+
+def build_demo_scenes(inputs: list[Path]) -> list[dict]:
+    """Build useful default scenes from part STLs sharing one coordinate frame."""
+    meshes = [trimesh.load(path) for path in inputs]
+    names = [path.stem for path in inputs]
+    colors = [PALETTE[i % len(PALETTE)] for i in range(len(inputs))]
+
+    assembly = {
+        "title": "Assembly",
+        "caption": (
+            f"{len(meshes)} part STL{'s' if len(meshes) != 1 else ''} in exported "
+            "coordinates. Use the legend to toggle parts."
+        ),
+        "parts": [
+            packed_part(mesh, name, color)
+            for mesh, name, color in zip(meshes, names, colors)
+        ],
+    }
+    if len(meshes) == 1:
+        return [assembly]
+
+    bounds = np.array([mesh.bounds for mesh in meshes])
+    scene_min = bounds[:, 0, :].min(axis=0)
+    scene_max = bounds[:, 1, :].max(axis=0)
+    scene_center = (scene_min + scene_max) / 2
+    distance = max(float((scene_max - scene_min).max()) * 0.28, 1.0)
+
+    exploded_parts = []
+    for i, (mesh, name, color) in enumerate(zip(meshes, names, colors)):
+        direction = np.asarray(mesh.bounds).mean(axis=0) - scene_center
+        norm = float(np.linalg.norm(direction))
+        if norm < 1e-8:
+            angle = 2 * np.pi * i / len(meshes)
+            direction = np.array([np.cos(angle), np.sin(angle), 0.7])
+            norm = float(np.linalg.norm(direction))
+        moved = mesh.copy()
+        moved.apply_translation(direction / norm * distance)
+        exploded_parts.append(packed_part(moved, name, color))
+
+    return [
+        assembly,
+        {
+            "title": "Exploded",
+            "caption": (
+                "Parts moved outward automatically for inspection. Use a manifest "
+                "when the presentation needs authored transforms."
+            ),
+            "parts": exploded_parts,
+        },
+    ]
 
 
 def build_scenes(args) -> tuple[str, str, list]:
     inputs = [Path(p) for p in args.inputs]
     if len(inputs) == 1 and inputs[0].suffix.lower() == ".json":
+        if args.demo:
+            raise ValueError("--demo accepts STL inputs, not a manifest JSON")
         man = json.loads(inputs[0].read_text())
         base = inputs[0].parent
         scenes = []
@@ -82,6 +145,12 @@ def build_scenes(args) -> tuple[str, str, list]:
             scenes.append(out)
             print(sc["title"], sum(len(p["stl"]) for p in parts) // 1024, "KB")
         return man.get("title", "STL preview"), man.get("subtitle", ""), scenes
+    if args.demo:
+        scenes = build_demo_scenes(inputs)
+        for scene in scenes:
+            print(scene["title"],
+                  sum(len(p["stl"]) for p in scene["parts"]) // 1024, "KB")
+        return args.title, "Auto-generated assembly and exploded views.", scenes
     scenes = []
     for i, f in enumerate(inputs):
         p = load_part({"stl": f.name, "color": PALETTE[i % len(PALETTE)]}, f.parent)
@@ -137,7 +206,7 @@ is fetched. Drag to orbit · wheel to zoom · shift-drag to pan.</div></header>
 <script>
 const SCENES = __SCENES__;
 const cv = document.getElementById("cv");
-const gl = cv.getContext("webgl", {antialias:true});
+const gl = cv.getContext("webgl", {antialias:true, preserveDrawingBuffer:true});
 const VS=`attribute vec3 aP,aN;uniform mat4 uMVP;uniform mat3 uNrm;uniform vec3 uOff;
 varying vec3 vN;void main(){vN=uNrm*aN;gl_Position=uMVP*vec4(aP+uOff,1.0);}`;
 const FS=`precision mediump float;varying vec3 vN;uniform vec3 uCol;uniform float uA;
@@ -331,10 +400,18 @@ show(0);
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("inputs", nargs="+", help="STL files, or one manifest.json")
+    ap.add_argument(
+        "--demo",
+        action="store_true",
+        help="combine part STLs into assembly and auto-exploded scenes",
+    )
     ap.add_argument("--out", required=True)
     ap.add_argument("--title", default="STL preview")
     a = ap.parse_args()
-    title, subtitle, scenes = build_scenes(a)
+    try:
+        title, subtitle, scenes = build_scenes(a)
+    except ValueError as exc:
+        ap.error(str(exc))
     html = (HTML.replace("__TITLE__", title).replace("__SUBTITLE__", subtitle)
             .replace("__SCENES__", json.dumps(scenes)))
     out = Path(a.out)

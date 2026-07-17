@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Blank viewer negative control</title></head>
+<body>
+  <button class="scene">Blank scene</button>
+  <canvas width="640" height="480"></canvas>
+  <script>
+    const canvas = document.querySelector("canvas");
+    const gl = canvas.getContext("webgl", {preserveDrawingBuffer: true});
+    gl.clearColor(0.059, 0.075, 0.106, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+  </script>
+</body>
+</html>

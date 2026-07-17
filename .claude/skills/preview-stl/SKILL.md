@@ -16,9 +16,14 @@ verification: `npm i -g playwright && npx playwright install chromium`.
 
 ## Viewer workflow
 
-1. Quick look at loose files:
+1. One-command demo from part STLs that share an exported coordinate frame:
+   `scripts/build_viewer.py --demo --out viewer.html --title "My assembly"
+   base.stl lid.stl insert.stl`. This creates a color-coded assembly with
+   visibility toggles plus an automatically separated exploded view. A single
+   STL produces one assembly scene.
+2. Quick look at loose files, with one scene per file:
    `scripts/build_viewer.py --out viewer.html --title "My part" a.stl b.stl`
-2. Real presentations: write a **manifest.json** (schema in the script header) —
+3. Authored presentations: write a **manifest.json** (schema in the script header) —
    one scene per view, each scene a list of parts with `name`/`color`/optional
    `alpha` (translucent) / `translate` / `rotate`. Good scene vocabulary:
    - **exploded stack** — translate each layer up by a constant;
@@ -27,10 +32,11 @@ verification: `npm i -g playwright && npx playwright install chromium`.
      through) as their own STLs and show them instead of the part; internal
      channels are invisible any other way;
    - **ghost** — `alpha` ≈ 0.45 part over an opaque interior.
-3. **Verify headlessly, always** (a viewer that renders black is worse than
+4. **Verify headlessly, always** (a viewer that renders black is worse than
    none): `NODE_PATH=$(npm root -g) node scripts/verify_page.cjs viewer.html
-   /tmp/shots` — fails on any console error; then actually LOOK at the
-   screenshots.
+   /tmp/shots` — fails on console errors, WebGL probe errors, or a scene with
+   too few non-background pixels; it saves each canvas directly (avoiding
+   headless GPU-compositing artifacts), then actually LOOK at the screenshots.
 
 How it stays self-contained: meshes are baked with trimesh (transforms applied),
 exported binary STL, gzip+base64-embedded; the page inflates them with the
